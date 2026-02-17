@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Search, Plus, Minus, Trash2, CreditCard, Banknote, Smartphone, X, CheckCircle, ArrowRight, Pause } from "lucide-react";
+import { useState, useCallback } from "react";
+import { Search, Plus, Minus, Trash2, CreditCard, Banknote, Smartphone, X, CheckCircle, ArrowRight, Pause, Printer } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ interface CartItem {
 const categories = ["الكل", "هواتف", "إكسسوارات", "كابلات", "أجهزة لوحية", "ساعات", "كمبيوتر"];
 
 const POS = () => {
-  const { products, addInvoice, addTransaction } = useStore();
+  const { products, addInvoice, addTransaction, storeInfo, taxSettings, printerSettings } = useStore();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("الكل");
@@ -52,8 +52,59 @@ const POS = () => {
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const discountAmount = (subtotal * discount) / 100;
-  const tax = (subtotal - discountAmount) * 0.15;
-  const total = subtotal - discountAmount + tax;
+  const taxRate = taxSettings.enabled ? taxSettings.rate / 100 : 0;
+
+  let tax: number;
+  let total: number;
+  if (taxSettings.includedInPrice) {
+    // Tax is included: total = subtotal - discount, tax = total - total/(1+rate)
+    total = subtotal - discountAmount;
+    tax = total - total / (1 + taxRate);
+  } else {
+    tax = (subtotal - discountAmount) * taxRate;
+    total = subtotal - discountAmount + tax;
+  }
+
+  const printReceipt = useCallback((receiptData: any) => {
+    const width = printerSettings.type === "58mm" ? "58mm" : printerSettings.type === "80mm" ? "80mm" : "210mm";
+    const printWindow = window.open("", "_blank", `width=400,height=600`);
+    if (!printWindow) return;
+    const itemsHtml = receiptData.items.map((item: any) =>
+      `<div style="display:flex;justify-content:space-between;font-size:12px;"><span>${item.name} × ${item.qty}</span><span>${(item.price * item.qty).toLocaleString()} ${storeInfo.currency}</span></div>`
+    ).join("");
+
+    printWindow.document.write(`
+      <html dir="rtl"><head><style>
+        @media print { @page { size: ${width} auto; margin: 2mm; } }
+        body { font-family: 'Cairo', sans-serif; width: ${width}; margin: 0 auto; padding: 5mm; font-size: 12px; }
+        .center { text-align: center; } .bold { font-weight: bold; }
+        .line { border-top: 1px dashed #000; margin: 4px 0; }
+        .row { display: flex; justify-content: space-between; }
+      </style></head><body>
+        <div class="center bold" style="font-size:16px;">${storeInfo.name}</div>
+        <div class="center" style="font-size:10px;">${storeInfo.address}</div>
+        <div class="center" style="font-size:10px;">هاتف: ${storeInfo.phone}</div>
+        ${storeInfo.taxNumber ? `<div class="center" style="font-size:10px;">الرقم الضريبي: ${storeInfo.taxNumber}</div>` : ""}
+        <div class="line"></div>
+        <div class="row"><span>التاريخ: ${receiptData.date}</span></div>
+        <div class="row"><span>العميل: ${receiptData.customer}</span></div>
+        <div class="line"></div>
+        ${itemsHtml}
+        <div class="line"></div>
+        <div class="row"><span>المجموع</span><span>${receiptData.subtotal.toLocaleString()} ${storeInfo.currency}</span></div>
+        ${receiptData.discount > 0 ? `<div class="row"><span>خصم ${receiptData.discount}%</span><span>-${((receiptData.subtotal * receiptData.discount) / 100).toLocaleString()}</span></div>` : ""}
+        ${taxSettings.enabled ? `<div class="row"><span>الضريبة ${taxSettings.rate}%</span><span>${Number(receiptData.tax).toFixed(2)} ${storeInfo.currency}</span></div>` : ""}
+        <div class="line"></div>
+        <div class="row bold" style="font-size:16px;"><span>الإجمالي</span><span>${Number(receiptData.total).toLocaleString()} ${storeInfo.currency}</span></div>
+        <div class="line"></div>
+        <div class="center" style="font-size:10px;">طريقة الدفع: ${receiptData.paymentMethod}</div>
+        <div class="center" style="font-size:10px;margin-top:8px;">شكراً لزيارتكم</div>
+      </body></html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => { printWindow.print(); printWindow.close(); }, 300);
+  }, [printerSettings.type, storeInfo, taxSettings]);
 
   const completeSale = (method: string) => {
     if (cart.length === 0) { toast({ title: "السلة فارغة", variant: "destructive" }); return; }
@@ -74,8 +125,22 @@ const POS = () => {
       description: `فاتورة - ${customerName}`, paymentMethod: method, treasury: "الخزنة الرئيسية",
     });
 
-    setLastReceipt({ ...invoice, total: total.toFixed(2) });
+    const receiptData = { ...invoice, total: total.toFixed(2) };
+    setLastReceipt(receiptData);
     setReceiptOpen(true);
+
+    // Auto print
+    if (printerSettings.autoPrint) {
+      printReceipt(receiptData);
+      if (printerSettings.printTwoCopies) {
+        setTimeout(() => printReceipt(receiptData), 1000);
+      }
+    }
+
+    if (printerSettings.openDrawer) {
+      toast({ title: "💰 تم فتح درج الكاش" });
+    }
+
     setCart([]);
     setDiscount(0);
     setCustomerName("عميل عابر");
@@ -139,7 +204,7 @@ const POS = () => {
                   <p className="text-xs text-muted-foreground">{product.category}</p>
                   <p className="text-xs text-muted-foreground">متوفر: {product.stock}</p>
                 </div>
-                <p className="text-sm font-bold text-primary mt-1">{product.sellPrice} ر.س</p>
+                <p className="text-sm font-bold text-primary mt-1">{product.sellPrice} {storeInfo.currency}</p>
               </button>
             ))}
           </div>
@@ -149,10 +214,12 @@ const POS = () => {
       {/* Cart Side */}
       <div className="w-[380px] bg-card border-r border-border flex flex-col">
         <div className="p-3 border-b border-border">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">العميل:</span>
-            <input value={customerName} onChange={e => setCustomerName(e.target.value)}
-              className="flex-1 bg-muted border-0 rounded-md px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 flex-1">
+              <span className="text-xs text-muted-foreground">العميل:</span>
+              <input value={customerName} onChange={e => setCustomerName(e.target.value)}
+                className="flex-1 bg-muted border-0 rounded-md px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            </div>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
@@ -160,7 +227,7 @@ const POS = () => {
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="text-4xl mb-3">🛒</span><p className="text-sm">اضغط على منتج لإضافته</p></div>
           ) : cart.map(item => (
             <div key={item.id} className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/50">
-              <div className="flex-1 min-w-0"><p className="text-sm font-medium text-card-foreground truncate">{item.name}</p><p className="text-xs text-muted-foreground">{item.price} ر.س</p></div>
+              <div className="flex-1 min-w-0"><p className="text-sm font-medium text-card-foreground truncate">{item.name}</p><p className="text-xs text-muted-foreground">{item.price} {storeInfo.currency}</p></div>
               <div className="flex items-center gap-1">
                 <button onClick={() => updateQty(item.id, -1)} className="w-6 h-6 rounded-md bg-card border border-border flex items-center justify-center text-muted-foreground hover:text-foreground"><Minus className="w-3 h-3" /></button>
                 <span className="w-7 text-center text-sm font-semibold text-card-foreground">{item.qty}</span>
@@ -177,10 +244,15 @@ const POS = () => {
               className="w-14 bg-muted border-0 rounded-md px-2 py-1 text-sm text-center text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
           </div>
           <div className="space-y-1 text-sm">
-            <div className="flex justify-between text-muted-foreground"><span>المجموع</span><span>{subtotal.toLocaleString()} ر.س</span></div>
+            <div className="flex justify-between text-muted-foreground"><span>المجموع</span><span>{subtotal.toLocaleString()} {storeInfo.currency}</span></div>
             {discount > 0 && <div className="flex justify-between text-success"><span>الخصم ({discount}%)</span><span>- {discountAmount.toLocaleString()}</span></div>}
-            <div className="flex justify-between text-muted-foreground"><span>الضريبة 15%</span><span>{tax.toFixed(0)} ر.س</span></div>
-            <div className="flex justify-between text-lg font-bold text-card-foreground pt-2 border-t border-border"><span>الإجمالي</span><span>{total.toFixed(0)} ر.س</span></div>
+            {taxSettings.enabled && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>الضريبة {taxSettings.rate}% {taxSettings.includedInPrice ? "(مشمولة)" : ""}</span>
+                <span>{tax.toFixed(0)} {storeInfo.currency}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-lg font-bold text-card-foreground pt-2 border-t border-border"><span>الإجمالي</span><span>{total.toFixed(0)} {storeInfo.currency}</span></div>
           </div>
           <div className="grid grid-cols-4 gap-1.5">
             <Button onClick={() => completeSale("كاش")} className="flex-col h-12 gap-0.5 text-[10px]"><Banknote className="w-4 h-4" />كاش</Button>
@@ -202,23 +274,27 @@ const POS = () => {
           {lastReceipt && (
             <div className="space-y-3 text-sm">
               <div className="text-center border-b border-dashed border-border pb-3">
-                <p className="font-bold text-card-foreground">متجر التقنية الحديثة</p>
+                <p className="font-bold text-card-foreground">{storeInfo.name}</p>
+                <p className="text-xs text-muted-foreground">{storeInfo.address}</p>
                 <p className="text-xs text-muted-foreground">{lastReceipt.date}</p>
                 <p className="text-xs text-muted-foreground">العميل: {lastReceipt.customer}</p>
               </div>
               <div className="space-y-1">
                 {lastReceipt.items.map((item: any, i: number) => (
-                  <div key={i} className="flex justify-between"><span className="text-muted-foreground">{item.name} × {item.qty}</span><span className="text-card-foreground">{(item.price * item.qty).toLocaleString()} ر.س</span></div>
+                  <div key={i} className="flex justify-between"><span className="text-muted-foreground">{item.name} × {item.qty}</span><span className="text-card-foreground">{(item.price * item.qty).toLocaleString()} {storeInfo.currency}</span></div>
                 ))}
               </div>
               <div className="border-t border-dashed border-border pt-2 space-y-1">
-                <div className="flex justify-between text-muted-foreground"><span>المجموع</span><span>{lastReceipt.subtotal.toLocaleString()} ر.س</span></div>
+                <div className="flex justify-between text-muted-foreground"><span>المجموع</span><span>{lastReceipt.subtotal.toLocaleString()} {storeInfo.currency}</span></div>
                 {lastReceipt.discount > 0 && <div className="flex justify-between text-success"><span>خصم {lastReceipt.discount}%</span><span>-{((lastReceipt.subtotal * lastReceipt.discount) / 100).toLocaleString()}</span></div>}
-                <div className="flex justify-between text-muted-foreground"><span>الضريبة</span><span>{Number(lastReceipt.tax).toFixed(0)} ر.س</span></div>
-                <div className="flex justify-between text-lg font-bold text-card-foreground border-t border-dashed border-border pt-2"><span>الإجمالي</span><span>{Number(lastReceipt.total).toLocaleString()} ر.س</span></div>
+                {taxSettings.enabled && <div className="flex justify-between text-muted-foreground"><span>الضريبة {taxSettings.rate}%</span><span>{Number(lastReceipt.tax).toFixed(0)} {storeInfo.currency}</span></div>}
+                <div className="flex justify-between text-lg font-bold text-card-foreground border-t border-dashed border-border pt-2"><span>الإجمالي</span><span>{Number(lastReceipt.total).toLocaleString()} {storeInfo.currency}</span></div>
                 <div className="text-center text-xs text-muted-foreground mt-2">طريقة الدفع: {lastReceipt.paymentMethod}</div>
               </div>
-              <Button className="w-full" onClick={() => setReceiptOpen(false)}>إغلاق</Button>
+              <div className="flex gap-2">
+                <Button className="flex-1" onClick={() => setReceiptOpen(false)}>إغلاق</Button>
+                <Button variant="outline" onClick={() => printReceipt(lastReceipt)}><Printer className="w-4 h-4 ml-1" />طباعة</Button>
+              </div>
             </div>
           )}
         </DialogContent>
