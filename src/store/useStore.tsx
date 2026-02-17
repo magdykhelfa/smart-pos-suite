@@ -63,6 +63,77 @@ export interface Invoice {
   employee: string;
 }
 
+export interface StoreInfo {
+  name: string;
+  phone: string;
+  address: string;
+  taxNumber: string;
+  crNumber: string;
+  currency: string;
+  language: string;
+}
+
+export interface TaxSettings {
+  enabled: boolean;
+  rate: number;
+  includedInPrice: boolean;
+}
+
+export interface PrinterSettings {
+  type: "80mm" | "58mm" | "A4";
+  autoPrint: boolean;
+  openDrawer: boolean;
+  printTwoCopies: boolean;
+}
+
+export interface NotificationSettings {
+  lowStock: boolean;
+  expiryAlert: boolean;
+  creditLimit: boolean;
+  dueInvoices: boolean;
+  dailySummary: boolean;
+}
+
+export interface BackupSettings {
+  autoBackup: boolean;
+  backupTime: string;
+  lastBackup: string;
+}
+
+export interface Permission {
+  key: string;
+  label: string;
+}
+
+export const ALL_PERMISSIONS: Permission[] = [
+  { key: "pos", label: "نقاط البيع" },
+  { key: "products", label: "المنتجات" },
+  { key: "customers", label: "العملاء" },
+  { key: "suppliers", label: "الموردين" },
+  { key: "accounting", label: "الحسابات" },
+  { key: "reports", label: "التقارير" },
+  { key: "settings", label: "الإعدادات" },
+  { key: "delete_invoices", label: "حذف الفواتير" },
+  { key: "edit_prices", label: "تعديل الأسعار" },
+  { key: "view_profits", label: "رؤية الأرباح" },
+  { key: "inventory", label: "المخزون" },
+];
+
+export interface Role {
+  id: string;
+  name: string;
+  permissions: string[];
+}
+
+export interface SystemUser {
+  id: string;
+  name: string;
+  username: string;
+  password: string;
+  roleId: string;
+  active: boolean;
+}
+
 // Initial Data
 const initialProducts: Product[] = [
   { id: "1", name: "آيفون 15 برو", sku: "IPH-15P", barcode: "1001", category: "هواتف", buyPrice: 1200, sellPrice: 1450, stock: 25, reorderLevel: 10, status: "متوفر" },
@@ -107,6 +178,20 @@ const initialInvoices: Invoice[] = [
   { id: "1044", date: "2026-02-16 10:45", customer: "خالد سعيد", items: [{ name: "سامسونج S24 الترا", qty: 2, price: 1350 }], subtotal: 2700, discount: 5, tax: 384.75, total: 2949.75, paymentMethod: "آجل", status: "معلقة", employee: "محمد الكاشير" },
 ];
 
+const initialRoles: Role[] = [
+  { id: "1", name: "مدير", permissions: ALL_PERMISSIONS.map(p => p.key) },
+  { id: "2", name: "مشرف", permissions: ["pos", "products", "customers", "reports", "view_profits"] },
+  { id: "3", name: "كاشير", permissions: ["pos", "customers"] },
+  { id: "4", name: "أمين مخزن", permissions: ["products", "inventory", "suppliers"] },
+  { id: "5", name: "محاسب", permissions: ["accounting", "reports", "view_profits"] },
+];
+
+const initialUsers: SystemUser[] = [
+  { id: "1", name: "أحمد المدير", username: "admin", password: "admin123", roleId: "1", active: true },
+  { id: "2", name: "محمد الكاشير", username: "cashier1", password: "cash123", roleId: "3", active: true },
+  { id: "3", name: "سارة", username: "sara", password: "sara123", roleId: "3", active: true },
+];
+
 // Context
 interface StoreContextType {
   products: Product[];
@@ -114,6 +199,13 @@ interface StoreContextType {
   suppliers: Supplier[];
   transactions: Transaction[];
   invoices: Invoice[];
+  storeInfo: StoreInfo;
+  taxSettings: TaxSettings;
+  printerSettings: PrinterSettings;
+  notificationSettings: NotificationSettings;
+  backupSettings: BackupSettings;
+  roles: Role[];
+  systemUsers: SystemUser[];
   addProduct: (p: Omit<Product, "id">) => void;
   updateProduct: (p: Product) => void;
   deleteProduct: (id: string) => void;
@@ -125,6 +217,19 @@ interface StoreContextType {
   deleteSupplier: (id: string) => void;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   addInvoice: (inv: Omit<Invoice, "id">) => void;
+  updateStoreInfo: (info: StoreInfo) => void;
+  updateTaxSettings: (settings: TaxSettings) => void;
+  updatePrinterSettings: (settings: PrinterSettings) => void;
+  updateNotificationSettings: (settings: NotificationSettings) => void;
+  updateBackupSettings: (settings: BackupSettings) => void;
+  addRole: (role: Omit<Role, "id">) => void;
+  updateRole: (role: Role) => void;
+  deleteRole: (id: string) => void;
+  addSystemUser: (user: Omit<SystemUser, "id">) => void;
+  updateSystemUser: (user: SystemUser) => void;
+  deleteSystemUser: (id: string) => void;
+  exportData: () => string;
+  importData: (json: string) => boolean;
 }
 
 const StoreContext = createContext<StoreContextType | null>(null);
@@ -144,6 +249,17 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const [suppliers, setSuppliers] = useState<Supplier[]>(initialSuppliers);
   const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
   const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
+  const [storeInfo, setStoreInfo] = useState<StoreInfo>({
+    name: "متجر التقنية الحديثة", phone: "0112345678",
+    address: "الرياض - حي العليا - شارع التحلية", taxNumber: "300123456700003",
+    crNumber: "1010123456", currency: "ر.س", language: "العربية",
+  });
+  const [taxSettings, setTaxSettings] = useState<TaxSettings>({ enabled: true, rate: 15, includedInPrice: false });
+  const [printerSettings, setPrinterSettings] = useState<PrinterSettings>({ type: "80mm", autoPrint: true, openDrawer: true, printTwoCopies: false });
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({ lowStock: true, expiryAlert: true, creditLimit: true, dueInvoices: true, dailySummary: false });
+  const [backupSettings, setBackupSettings] = useState<BackupSettings>({ autoBackup: true, backupTime: "02:00", lastBackup: "2026-02-16 10:00" });
+  const [roles, setRoles] = useState<Role[]>(initialRoles);
+  const [systemUsers, setSystemUsers] = useState<SystemUser[]>(initialUsers);
 
   const addProduct = useCallback((p: Omit<Product, "id">) => setProducts(prev => [...prev, { ...p, id: genId() }]), []);
   const updateProduct = useCallback((p: Product) => setProducts(prev => prev.map(x => x.id === p.id ? p : x)), []);
@@ -160,13 +276,59 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const addTransaction = useCallback((t: Omit<Transaction, "id">) => setTransactions(prev => [{ ...t, id: genId() }, ...prev]), []);
   const addInvoice = useCallback((inv: Omit<Invoice, "id">) => setInvoices(prev => [{ ...inv, id: String(Number(prev[0]?.id || 1000) + 1) }, ...prev]), []);
 
+  const updateStoreInfo = useCallback((info: StoreInfo) => setStoreInfo(info), []);
+  const updateTaxSettings = useCallback((s: TaxSettings) => setTaxSettings(s), []);
+  const updatePrinterSettings = useCallback((s: PrinterSettings) => setPrinterSettings(s), []);
+  const updateNotificationSettings = useCallback((s: NotificationSettings) => setNotificationSettings(s), []);
+  const updateBackupSettings = useCallback((s: BackupSettings) => setBackupSettings(s), []);
+
+  const addRole = useCallback((r: Omit<Role, "id">) => setRoles(prev => [...prev, { ...r, id: genId() }]), []);
+  const updateRole = useCallback((r: Role) => setRoles(prev => prev.map(x => x.id === r.id ? r : x)), []);
+  const deleteRole = useCallback((id: string) => setRoles(prev => prev.filter(x => x.id !== id)), []);
+
+  const addSystemUser = useCallback((u: Omit<SystemUser, "id">) => setSystemUsers(prev => [...prev, { ...u, id: genId() }]), []);
+  const updateSystemUser = useCallback((u: SystemUser) => setSystemUsers(prev => prev.map(x => x.id === u.id ? u : x)), []);
+  const deleteSystemUser = useCallback((id: string) => setSystemUsers(prev => prev.filter(x => x.id !== id)), []);
+
+  const exportData = useCallback(() => {
+    return JSON.stringify({
+      products, customers, suppliers, transactions, invoices,
+      storeInfo, taxSettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
+      exportDate: new Date().toISOString(),
+    }, null, 2);
+  }, [products, customers, suppliers, transactions, invoices, storeInfo, taxSettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers]);
+
+  const importData = useCallback((json: string): boolean => {
+    try {
+      const data = JSON.parse(json);
+      if (data.products) setProducts(data.products);
+      if (data.customers) setCustomers(data.customers);
+      if (data.suppliers) setSuppliers(data.suppliers);
+      if (data.transactions) setTransactions(data.transactions);
+      if (data.invoices) setInvoices(data.invoices);
+      if (data.storeInfo) setStoreInfo(data.storeInfo);
+      if (data.taxSettings) setTaxSettings(data.taxSettings);
+      if (data.printerSettings) setPrinterSettings(data.printerSettings);
+      if (data.notificationSettings) setNotificationSettings(data.notificationSettings);
+      if (data.roles) setRoles(data.roles);
+      if (data.systemUsers) setSystemUsers(data.systemUsers);
+      setBackupSettings(prev => ({ ...prev, lastBackup: new Date().toLocaleString("ar-EG") }));
+      return true;
+    } catch { return false; }
+  }, []);
+
   return (
     <StoreContext.Provider value={{
       products, customers, suppliers, transactions, invoices,
+      storeInfo, taxSettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
       addProduct, updateProduct, deleteProduct,
       addCustomer, updateCustomer, deleteCustomer,
       addSupplier, updateSupplier, deleteSupplier,
       addTransaction, addInvoice,
+      updateStoreInfo, updateTaxSettings, updatePrinterSettings, updateNotificationSettings, updateBackupSettings,
+      addRole, updateRole, deleteRole,
+      addSystemUser, updateSystemUser, deleteSystemUser,
+      exportData, importData,
     }}>
       {children}
     </StoreContext.Provider>
