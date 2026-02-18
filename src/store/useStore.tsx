@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode, useCallback } from "react";
+import { createContext, useContext, useState, ReactNode, useCallback, useEffect } from "react";
 
 // Types
 export interface Product {
@@ -59,8 +59,10 @@ export interface Invoice {
   tax: number;
   total: number;
   paymentMethod: string;
-  status: "مكتملة" | "معلقة" | "ملغاة";
+  status: "مكتملة" | "معلقة" | "ملغاة" | "مرتجعة";
   employee: string;
+  loyaltyPointsEarned?: number;
+  loyaltyPointsRedeemed?: number;
 }
 
 export interface StoreInfo {
@@ -77,6 +79,14 @@ export interface TaxSettings {
   enabled: boolean;
   rate: number;
   includedInPrice: boolean;
+}
+
+export interface LoyaltySettings {
+  enabled: boolean;
+  pointsPerUnit: number; // points earned per currency unit spent
+  pointValue: number; // currency value of each point when redeemed
+  showOnReceipt: boolean;
+  allowUnregistered: boolean;
 }
 
 export interface PrinterSettings {
@@ -117,6 +127,7 @@ export const ALL_PERMISSIONS: Permission[] = [
   { key: "edit_prices", label: "تعديل الأسعار" },
   { key: "view_profits", label: "رؤية الأرباح" },
   { key: "inventory", label: "المخزون" },
+  { key: "sales", label: "المبيعات" },
 ];
 
 export interface Role {
@@ -178,10 +189,12 @@ const initialInvoices: Invoice[] = [
   { id: "1044", date: "2026-02-16 10:45", customer: "خالد سعيد", items: [{ name: "سامسونج S24 الترا", qty: 2, price: 1350 }], subtotal: 2700, discount: 5, tax: 384.75, total: 2949.75, paymentMethod: "آجل", status: "معلقة", employee: "محمد الكاشير" },
 ];
 
+const initialCategories: string[] = ["هواتف", "إكسسوارات", "كابلات", "أجهزة لوحية", "ساعات", "كمبيوتر"];
+
 const initialRoles: Role[] = [
   { id: "1", name: "مدير", permissions: ALL_PERMISSIONS.map(p => p.key) },
-  { id: "2", name: "مشرف", permissions: ["pos", "products", "customers", "reports", "view_profits"] },
-  { id: "3", name: "كاشير", permissions: ["pos", "customers"] },
+  { id: "2", name: "مشرف", permissions: ["pos", "products", "customers", "reports", "view_profits", "sales"] },
+  { id: "3", name: "كاشير", permissions: ["pos", "customers", "sales"] },
   { id: "4", name: "أمين مخزن", permissions: ["products", "inventory", "suppliers"] },
   { id: "5", name: "محاسب", permissions: ["accounting", "reports", "view_profits"] },
 ];
@@ -192,6 +205,25 @@ const initialUsers: SystemUser[] = [
   { id: "3", name: "سارة", username: "sara", password: "sara123", roleId: "3", active: true },
 ];
 
+// localStorage helpers
+const STORAGE_KEY = "cashier-pro-data";
+
+function loadFromStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return fallback;
+    const data = JSON.parse(raw);
+    return data[key] !== undefined ? data[key] : fallback;
+  } catch { return fallback; }
+}
+
+function saveToStorage(data: Record<string, any>) {
+  try {
+    const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...existing, ...data }));
+  } catch { /* ignore */ }
+}
+
 // Context
 interface StoreContextType {
   products: Product[];
@@ -199,8 +231,10 @@ interface StoreContextType {
   suppliers: Supplier[];
   transactions: Transaction[];
   invoices: Invoice[];
+  categories: string[];
   storeInfo: StoreInfo;
   taxSettings: TaxSettings;
+  loyaltySettings: LoyaltySettings;
   printerSettings: PrinterSettings;
   notificationSettings: NotificationSettings;
   backupSettings: BackupSettings;
@@ -217,8 +251,12 @@ interface StoreContextType {
   deleteSupplier: (id: string) => void;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   addInvoice: (inv: Omit<Invoice, "id">) => void;
+  updateInvoice: (inv: Invoice) => void;
+  addCategory: (cat: string) => void;
+  deleteCategory: (cat: string) => boolean;
   updateStoreInfo: (info: StoreInfo) => void;
   updateTaxSettings: (settings: TaxSettings) => void;
+  updateLoyaltySettings: (settings: LoyaltySettings) => void;
   updatePrinterSettings: (settings: PrinterSettings) => void;
   updateNotificationSettings: (settings: NotificationSettings) => void;
   updateBackupSettings: (settings: BackupSettings) => void;
@@ -244,22 +282,29 @@ let nextId = 100;
 const genId = () => String(++nextId);
 
 export const StoreProvider = ({ children }: { children: ReactNode }) => {
-  const [products, setProducts] = useState<Product[]>(initialProducts);
-  const [customers, setCustomers] = useState<Customer[]>(initialCustomers);
-  const [suppliers, setSuppliers] = useState<Supplier[]>(initialSuppliers);
-  const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
-  const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
-  const [storeInfo, setStoreInfo] = useState<StoreInfo>({
+  const [products, setProducts] = useState<Product[]>(() => loadFromStorage("products", initialProducts));
+  const [customers, setCustomers] = useState<Customer[]>(() => loadFromStorage("customers", initialCustomers));
+  const [suppliers, setSuppliers] = useState<Supplier[]>(() => loadFromStorage("suppliers", initialSuppliers));
+  const [transactions, setTransactions] = useState<Transaction[]>(() => loadFromStorage("transactions", initialTransactions));
+  const [invoices, setInvoices] = useState<Invoice[]>(() => loadFromStorage("invoices", initialInvoices));
+  const [categories, setCategories] = useState<string[]>(() => loadFromStorage("categories", initialCategories));
+  const [storeInfo, setStoreInfo] = useState<StoreInfo>(() => loadFromStorage("storeInfo", {
     name: "متجر التقنية الحديثة", phone: "0112345678",
     address: "الرياض - حي العليا - شارع التحلية", taxNumber: "300123456700003",
     crNumber: "1010123456", currency: "ر.س", language: "العربية",
-  });
-  const [taxSettings, setTaxSettings] = useState<TaxSettings>({ enabled: true, rate: 15, includedInPrice: false });
-  const [printerSettings, setPrinterSettings] = useState<PrinterSettings>({ type: "80mm", autoPrint: true, openDrawer: true, printTwoCopies: false });
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({ lowStock: true, expiryAlert: true, creditLimit: true, dueInvoices: true, dailySummary: false });
-  const [backupSettings, setBackupSettings] = useState<BackupSettings>({ autoBackup: true, backupTime: "02:00", lastBackup: "2026-02-16 10:00" });
-  const [roles, setRoles] = useState<Role[]>(initialRoles);
-  const [systemUsers, setSystemUsers] = useState<SystemUser[]>(initialUsers);
+  }));
+  const [taxSettings, setTaxSettings] = useState<TaxSettings>(() => loadFromStorage("taxSettings", { enabled: true, rate: 15, includedInPrice: false }));
+  const [loyaltySettings, setLoyaltySettings] = useState<LoyaltySettings>(() => loadFromStorage("loyaltySettings", { enabled: true, pointsPerUnit: 1, pointValue: 0.1, showOnReceipt: true, allowUnregistered: true }));
+  const [printerSettings, setPrinterSettings] = useState<PrinterSettings>(() => loadFromStorage("printerSettings", { type: "80mm", autoPrint: true, openDrawer: true, printTwoCopies: false }));
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => loadFromStorage("notificationSettings", { lowStock: true, expiryAlert: true, creditLimit: true, dueInvoices: true, dailySummary: false }));
+  const [backupSettings, setBackupSettings] = useState<BackupSettings>(() => loadFromStorage("backupSettings", { autoBackup: true, backupTime: "02:00", lastBackup: "2026-02-16 10:00" }));
+  const [roles, setRoles] = useState<Role[]>(() => loadFromStorage("roles", initialRoles));
+  const [systemUsers, setSystemUsers] = useState<SystemUser[]>(() => loadFromStorage("systemUsers", initialUsers));
+
+  // Auto-save to localStorage
+  useEffect(() => {
+    saveToStorage({ products, customers, suppliers, transactions, invoices, categories, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers });
+  }, [products, customers, suppliers, transactions, invoices, categories, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers]);
 
   const addProduct = useCallback((p: Omit<Product, "id">) => setProducts(prev => [...prev, { ...p, id: genId() }]), []);
   const updateProduct = useCallback((p: Product) => setProducts(prev => prev.map(x => x.id === p.id ? p : x)), []);
@@ -275,9 +320,19 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
 
   const addTransaction = useCallback((t: Omit<Transaction, "id">) => setTransactions(prev => [{ ...t, id: genId() }, ...prev]), []);
   const addInvoice = useCallback((inv: Omit<Invoice, "id">) => setInvoices(prev => [{ ...inv, id: String(Number(prev[0]?.id || 1000) + 1) }, ...prev]), []);
+  const updateInvoice = useCallback((inv: Invoice) => setInvoices(prev => prev.map(x => x.id === inv.id ? inv : x)), []);
+
+  const addCategory = useCallback((cat: string) => setCategories(prev => prev.includes(cat) ? prev : [...prev, cat]), []);
+  const deleteCategory = useCallback((cat: string): boolean => {
+    const hasProducts = products.some(p => p.category === cat);
+    if (hasProducts) return false;
+    setCategories(prev => prev.filter(c => c !== cat));
+    return true;
+  }, [products]);
 
   const updateStoreInfo = useCallback((info: StoreInfo) => setStoreInfo(info), []);
   const updateTaxSettings = useCallback((s: TaxSettings) => setTaxSettings(s), []);
+  const updateLoyaltySettings = useCallback((s: LoyaltySettings) => setLoyaltySettings(s), []);
   const updatePrinterSettings = useCallback((s: PrinterSettings) => setPrinterSettings(s), []);
   const updateNotificationSettings = useCallback((s: NotificationSettings) => setNotificationSettings(s), []);
   const updateBackupSettings = useCallback((s: BackupSettings) => setBackupSettings(s), []);
@@ -292,11 +347,11 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
 
   const exportData = useCallback(() => {
     return JSON.stringify({
-      products, customers, suppliers, transactions, invoices,
-      storeInfo, taxSettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
+      products, customers, suppliers, transactions, invoices, categories,
+      storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
       exportDate: new Date().toISOString(),
     }, null, 2);
-  }, [products, customers, suppliers, transactions, invoices, storeInfo, taxSettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers]);
+  }, [products, customers, suppliers, transactions, invoices, categories, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers]);
 
   const importData = useCallback((json: string): boolean => {
     try {
@@ -306,8 +361,10 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
       if (data.suppliers) setSuppliers(data.suppliers);
       if (data.transactions) setTransactions(data.transactions);
       if (data.invoices) setInvoices(data.invoices);
+      if (data.categories) setCategories(data.categories);
       if (data.storeInfo) setStoreInfo(data.storeInfo);
       if (data.taxSettings) setTaxSettings(data.taxSettings);
+      if (data.loyaltySettings) setLoyaltySettings(data.loyaltySettings);
       if (data.printerSettings) setPrinterSettings(data.printerSettings);
       if (data.notificationSettings) setNotificationSettings(data.notificationSettings);
       if (data.roles) setRoles(data.roles);
@@ -319,13 +376,14 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
 
   return (
     <StoreContext.Provider value={{
-      products, customers, suppliers, transactions, invoices,
-      storeInfo, taxSettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
+      products, customers, suppliers, transactions, invoices, categories,
+      storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
       addProduct, updateProduct, deleteProduct,
       addCustomer, updateCustomer, deleteCustomer,
       addSupplier, updateSupplier, deleteSupplier,
-      addTransaction, addInvoice,
-      updateStoreInfo, updateTaxSettings, updatePrinterSettings, updateNotificationSettings, updateBackupSettings,
+      addTransaction, addInvoice, updateInvoice,
+      addCategory, deleteCategory,
+      updateStoreInfo, updateTaxSettings, updateLoyaltySettings, updatePrinterSettings, updateNotificationSettings, updateBackupSettings,
       addRole, updateRole, deleteRole,
       addSystemUser, updateSystemUser, deleteSystemUser,
       exportData, importData,

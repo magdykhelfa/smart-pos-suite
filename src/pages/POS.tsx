@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { Search, Plus, Minus, Trash2, CreditCard, Banknote, Smartphone, X, ArrowRight, Pause, Printer } from "lucide-react";
+import { useState, useCallback, useRef } from "react";
+import { Search, Plus, Minus, Trash2, CreditCard, Banknote, Smartphone, X, ArrowRight, Pause, Printer, Users, ChevronDown, Star } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { t } from "@/i18n/translations";
 import { cn } from "@/lib/utils";
@@ -10,28 +10,38 @@ import { Link } from "react-router-dom";
 
 interface CartItem { id: string; name: string; price: number; qty: number; }
 
-const categories = ["الكل", "هواتف", "إكسسوارات", "كابلات", "أجهزة لوحية", "ساعات", "كمبيوتر"];
-
 const POS = () => {
-  const { products, addInvoice, addTransaction, storeInfo, taxSettings, printerSettings } = useStore();
+  const { products, customers, addInvoice, addTransaction, updateCustomer, storeInfo, taxSettings, printerSettings, loyaltySettings, categories } = useStore();
   const lang = storeInfo.language as "العربية" | "English";
   const cur = storeInfo.currency;
+  const allCategories = [lang === "English" ? "All" : "الكل", ...categories];
   const [cart, setCart] = useState<CartItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState("الكل");
+  const [activeCategory, setActiveCategory] = useState(allCategories[0]);
   const [discount, setDiscount] = useState(0);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<any>(null);
   const [customerName, setCustomerName] = useState(t(lang, "walkInCustomer"));
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
   const [suspendedCarts, setSuspendedCarts] = useState<{ name: string; cart: CartItem[]; discount: number }[]>([]);
   const [suspendedOpen, setSuspendedOpen] = useState(false);
+  const [redeemPoints, setRedeemPoints] = useState(0);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
 
   const posProducts = products.filter(p => p.stock > 0);
   const filteredProducts = posProducts.filter(p => {
-    const matchesSearch = p.name.includes(searchQuery) || p.barcode.includes(searchQuery);
-    const matchesCategory = activeCategory === "الكل" || p.category === activeCategory;
+    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.barcode.includes(searchQuery);
+    const matchesCategory = activeCategory === allCategories[0] || p.category === activeCategory;
     return matchesSearch && matchesCategory;
   });
+
+  const filteredCustomers = customers.filter(c =>
+    c.name.includes(customerSearch) || c.phone.includes(customerSearch)
+  );
+
+  const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
   const addToCart = (product: typeof products[0]) => {
     setCart(prev => {
@@ -50,14 +60,31 @@ const POS = () => {
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const discountAmount = (subtotal * discount) / 100;
   const taxRate = taxSettings.enabled ? taxSettings.rate / 100 : 0;
+  const pointsDiscount = redeemPoints * loyaltySettings.pointValue;
   let tax: number, total: number;
   if (taxSettings.includedInPrice) {
-    total = subtotal - discountAmount;
+    total = subtotal - discountAmount - pointsDiscount;
     tax = total - total / (1 + taxRate);
   } else {
-    tax = (subtotal - discountAmount) * taxRate;
-    total = subtotal - discountAmount + tax;
+    tax = (subtotal - discountAmount - pointsDiscount) * taxRate;
+    total = subtotal - discountAmount - pointsDiscount + tax;
   }
+
+  const loyaltyPointsToEarn = loyaltySettings.enabled ? Math.floor(total * loyaltySettings.pointsPerUnit) : 0;
+
+  const selectCustomer = (c: typeof customers[0]) => {
+    setSelectedCustomerId(c.id);
+    setCustomerName(c.name);
+    setShowCustomerDropdown(false);
+    setCustomerSearch("");
+    setRedeemPoints(0);
+  };
+
+  const clearCustomer = () => {
+    setSelectedCustomerId("");
+    setCustomerName(t(lang, "walkInCustomer"));
+    setRedeemPoints(0);
+  };
 
   const printReceipt = useCallback((receiptData: any) => {
     const width = printerSettings.type === "58mm" ? "58mm" : printerSettings.type === "80mm" ? "80mm" : "210mm";
@@ -66,6 +93,8 @@ const POS = () => {
     const itemsHtml = receiptData.items.map((item: any) =>
       `<div style="display:flex;justify-content:space-between;font-size:12px;"><span>${item.name} × ${item.qty}</span><span>${(item.price * item.qty).toLocaleString()} ${cur}</span></div>`
     ).join("");
+    const loyaltyHtml = loyaltySettings.enabled && loyaltySettings.showOnReceipt && receiptData.loyaltyPointsEarned
+      ? `<div class="center" style="font-size:10px;margin-top:4px;">⭐ ${t(lang, "pointsEarned")}: ${receiptData.loyaltyPointsEarned}</div>` : "";
     printWindow.document.write(`
       <html dir="rtl"><head><style>@media print{@page{size:${width} auto;margin:2mm;}}body{font-family:'Cairo',sans-serif;width:${width};margin:0 auto;padding:5mm;font-size:12px;}.center{text-align:center;}.bold{font-weight:bold;}.line{border-top:1px dashed #000;margin:4px 0;}.row{display:flex;justify-content:space-between;}</style></head><body>
         <div class="center bold" style="font-size:16px;">${storeInfo.name}</div>
@@ -78,20 +107,25 @@ const POS = () => {
         <div class="line"></div>${itemsHtml}<div class="line"></div>
         <div class="row"><span>${t(lang, "subtotal")}</span><span>${receiptData.subtotal.toLocaleString()} ${cur}</span></div>
         ${receiptData.discount > 0 ? `<div class="row"><span>${t(lang, "discountLabel")} ${receiptData.discount}%</span><span>-${((receiptData.subtotal * receiptData.discount) / 100).toLocaleString()}</span></div>` : ""}
+        ${receiptData.loyaltyPointsRedeemed ? `<div class="row"><span>${t(lang, "pointsRedeemed")}</span><span>-${(receiptData.loyaltyPointsRedeemed * loyaltySettings.pointValue).toFixed(2)} ${cur}</span></div>` : ""}
         ${taxSettings.enabled ? `<div class="row"><span>${t(lang, "tax")} ${taxSettings.rate}%</span><span>${Number(receiptData.tax).toFixed(2)} ${cur}</span></div>` : ""}
         <div class="line"></div>
         <div class="row bold" style="font-size:16px;"><span>${t(lang, "grandTotal")}</span><span>${Number(receiptData.total).toLocaleString()} ${cur}</span></div>
         <div class="line"></div>
         <div class="center" style="font-size:10px;">${receiptData.paymentMethod}</div>
+        ${loyaltyHtml}
         <div class="center" style="font-size:10px;margin-top:8px;">${t(lang, "thankYou")}</div>
       </body></html>`);
     printWindow.document.close();
     printWindow.focus();
     setTimeout(() => { printWindow.print(); printWindow.close(); }, 300);
-  }, [printerSettings.type, storeInfo, taxSettings, cur, lang]);
+  }, [printerSettings.type, storeInfo, taxSettings, loyaltySettings, cur, lang]);
 
   const completeSale = (method: string) => {
     if (cart.length === 0) { toast({ title: t(lang, "cartEmpty"), variant: "destructive" }); return; }
+
+    const shouldAwardPoints = loyaltySettings.enabled && (selectedCustomerId || loyaltySettings.allowUnregistered);
+
     const invoice = {
       date: new Date().toLocaleString(lang === "English" ? "en-US" : "ar-EG"),
       customer: customerName,
@@ -99,9 +133,23 @@ const POS = () => {
       subtotal, discount, tax, total, paymentMethod: method,
       status: method === "آجل" ? "معلقة" as const : "مكتملة" as const,
       employee: "الكاشير",
+      loyaltyPointsEarned: shouldAwardPoints ? loyaltyPointsToEarn : 0,
+      loyaltyPointsRedeemed: redeemPoints > 0 ? redeemPoints : 0,
     };
     addInvoice(invoice);
     addTransaction({ date: new Date().toISOString().split("T")[0], type: "sale", category: "مبيعات", amount: total, description: `فاتورة - ${customerName}`, paymentMethod: method, treasury: "الخزنة الرئيسية" });
+
+    // Update customer loyalty points
+    if (selectedCustomer && loyaltySettings.enabled) {
+      const newPoints = selectedCustomer.loyaltyPoints + loyaltyPointsToEarn - redeemPoints;
+      updateCustomer({
+        ...selectedCustomer,
+        loyaltyPoints: Math.max(0, newPoints),
+        totalPurchases: selectedCustomer.totalPurchases + total,
+        balance: method === "آجل" ? selectedCustomer.balance + total : selectedCustomer.balance,
+      });
+    }
+
     const receiptData = { ...invoice, total: total.toFixed(2) };
     setLastReceipt(receiptData);
     setReceiptOpen(true);
@@ -110,7 +158,7 @@ const POS = () => {
       if (printerSettings.printTwoCopies) setTimeout(() => printReceipt(receiptData), 1000);
     }
     if (printerSettings.openDrawer) toast({ title: t(lang, "cashDrawerOpened") });
-    setCart([]); setDiscount(0); setCustomerName(t(lang, "walkInCustomer"));
+    setCart([]); setDiscount(0); setCustomerName(t(lang, "walkInCustomer")); setSelectedCustomerId(""); setRedeemPoints(0);
     toast({ title: t(lang, "saleCompleted") });
   };
 
@@ -147,7 +195,7 @@ const POS = () => {
           )}
         </div>
         <div className="px-3 py-2 flex gap-2 overflow-x-auto border-b border-border">
-          {categories.map(cat => (
+          {allCategories.map(cat => (
             <button key={cat} onClick={() => setActiveCategory(cat)}
               className={cn("px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors",
                 activeCategory === cat ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground")}>
@@ -173,13 +221,49 @@ const POS = () => {
       </div>
 
       <div className="w-[380px] bg-card border-r border-border flex flex-col">
-        <div className="p-3 border-b border-border">
+        <div className="p-3 border-b border-border space-y-2">
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">{t(lang, "customerLabel")}</span>
-            <input value={customerName} onChange={e => setCustomerName(e.target.value)}
-              className="flex-1 bg-muted border-0 rounded-md px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            <div className="flex-1 relative" ref={customerDropdownRef}>
+              <input value={customerName} onChange={e => { setCustomerName(e.target.value); setSelectedCustomerId(""); }}
+                className="w-full bg-muted border-0 rounded-md px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            </div>
+            <button onClick={() => setShowCustomerDropdown(!showCustomerDropdown)} className="p-1 rounded-md bg-muted hover:bg-accent text-muted-foreground"><Users className="w-4 h-4" /></button>
+            {selectedCustomerId && <button onClick={clearCustomer} className="p-1 rounded-md text-destructive hover:bg-destructive/10"><X className="w-3 h-3" /></button>}
           </div>
+          {selectedCustomer && loyaltySettings.enabled && (
+            <div className="flex items-center gap-2 text-xs">
+              <Star className="w-3 h-3 text-warning" />
+              <span className="text-muted-foreground">{t(lang, "availablePoints")}: <span className="font-bold text-primary">{selectedCustomer.loyaltyPoints}</span></span>
+              {selectedCustomer.loyaltyPoints > 0 && (
+                <div className="flex items-center gap-1 mr-auto">
+                  <input type="number" min={0} max={selectedCustomer.loyaltyPoints} value={redeemPoints}
+                    onChange={e => setRedeemPoints(Math.min(Number(e.target.value), selectedCustomer.loyaltyPoints))}
+                    className="w-14 bg-muted border-0 rounded-md px-1 py-0.5 text-[11px] text-center text-foreground" />
+                  <span className="text-muted-foreground">= {(redeemPoints * loyaltySettings.pointValue).toFixed(2)} {cur}</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* Customer dropdown */}
+        <Dialog open={showCustomerDropdown} onOpenChange={setShowCustomerDropdown}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>{t(lang, "registeredCustomers")}</DialogTitle><DialogDescription>{t(lang, "selectCustomer")}</DialogDescription></DialogHeader>
+            <input value={customerSearch} onChange={e => setCustomerSearch(e.target.value)} placeholder={t(lang, "searchNamePhone")}
+              className="w-full bg-muted border-0 rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            <div className="max-h-60 overflow-y-auto space-y-1">
+              {filteredCustomers.map(c => (
+                <button key={c.id} onClick={() => selectCustomer(c)} className="w-full flex items-center justify-between p-2.5 rounded-lg hover:bg-muted/50 transition-colors text-right">
+                  <div><p className="text-sm font-medium text-card-foreground">{c.name}</p><p className="text-xs text-muted-foreground">{c.phone}</p></div>
+                  {loyaltySettings.enabled && <span className="text-xs text-primary font-medium">{c.loyaltyPoints} {t(lang, "point")}</span>}
+                </button>
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
+
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {cart.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="text-4xl mb-3">🛒</span><p className="text-sm">{t(lang, "addToCartMsg")}</p></div>
@@ -204,6 +288,7 @@ const POS = () => {
           <div className="space-y-1 text-sm">
             <div className="flex justify-between text-muted-foreground"><span>{t(lang, "subtotal")}</span><span>{subtotal.toLocaleString()} {cur}</span></div>
             {discount > 0 && <div className="flex justify-between text-success"><span>{t(lang, "discountLabel")} ({discount}%)</span><span>- {discountAmount.toLocaleString()}</span></div>}
+            {redeemPoints > 0 && <div className="flex justify-between text-warning"><span>{t(lang, "pointsRedeemed")} ({redeemPoints})</span><span>- {pointsDiscount.toFixed(2)}</span></div>}
             {taxSettings.enabled && (
               <div className="flex justify-between text-muted-foreground">
                 <span>{t(lang, "tax")} {taxSettings.rate}% {taxSettings.includedInPrice ? t(lang, "includedInPrice") : ""}</span>
@@ -211,6 +296,9 @@ const POS = () => {
               </div>
             )}
             <div className="flex justify-between text-lg font-bold text-card-foreground pt-2 border-t border-border"><span>{t(lang, "grandTotal")}</span><span>{total.toFixed(0)} {cur}</span></div>
+            {loyaltySettings.enabled && loyaltyPointsToEarn > 0 && (
+              <div className="flex justify-between text-xs text-primary"><span>⭐ {t(lang, "pointsEarned")}</span><span>+{loyaltyPointsToEarn}</span></div>
+            )}
           </div>
           <div className="grid grid-cols-4 gap-1.5">
             <Button onClick={() => completeSale("كاش")} className="flex-col h-12 gap-0.5 text-[10px]"><Banknote className="w-4 h-4" />{t(lang, "cash")}</Button>
@@ -244,9 +332,13 @@ const POS = () => {
               <div className="border-t border-dashed border-border pt-2 space-y-1">
                 <div className="flex justify-between text-muted-foreground"><span>{t(lang, "subtotal")}</span><span>{lastReceipt.subtotal.toLocaleString()} {cur}</span></div>
                 {lastReceipt.discount > 0 && <div className="flex justify-between text-success"><span>{t(lang, "discountLabel")} {lastReceipt.discount}%</span><span>-{((lastReceipt.subtotal * lastReceipt.discount) / 100).toLocaleString()}</span></div>}
+                {lastReceipt.loyaltyPointsRedeemed > 0 && <div className="flex justify-between text-warning"><span>{t(lang, "pointsRedeemed")}</span><span>-{(lastReceipt.loyaltyPointsRedeemed * loyaltySettings.pointValue).toFixed(2)}</span></div>}
                 {taxSettings.enabled && <div className="flex justify-between text-muted-foreground"><span>{t(lang, "tax")} {taxSettings.rate}%</span><span>{Number(lastReceipt.tax).toFixed(0)} {cur}</span></div>}
                 <div className="flex justify-between text-lg font-bold text-card-foreground border-t border-dashed border-border pt-2"><span>{t(lang, "grandTotal")}</span><span>{Number(lastReceipt.total).toLocaleString()} {cur}</span></div>
                 <div className="text-center text-xs text-muted-foreground mt-2">{lastReceipt.paymentMethod}</div>
+                {loyaltySettings.enabled && lastReceipt.loyaltyPointsEarned > 0 && (
+                  <div className="text-center text-xs text-primary mt-1">⭐ {t(lang, "pointsEarned")}: +{lastReceipt.loyaltyPointsEarned}</div>
+                )}
               </div>
               <div className="flex gap-2">
                 <Button className="flex-1" onClick={() => setReceiptOpen(false)}>{t(lang, "close")}</Button>

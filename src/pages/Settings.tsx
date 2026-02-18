@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Store, Receipt, Shield, Users, Bell, Database, Printer, Plus, Pencil, Trash2, Download, Upload, Eye, EyeOff, UserPlus, X, Check } from "lucide-react";
+import { Store, Receipt, Shield, Users, Bell, Database, Printer, Plus, Pencil, Trash2, Download, Upload, Eye, EyeOff, UserPlus, X, Check, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -8,7 +8,7 @@ import { useStore, ALL_PERMISSIONS, Role, SystemUser } from "@/store/useStore";
 import { t } from "@/i18n/translations";
 import { Switch } from "@/components/ui/switch";
 
-type SettingsTab = "store" | "tax" | "roles" | "notifications" | "backup" | "printer";
+type SettingsTab = "store" | "tax" | "loyalty" | "roles" | "notifications" | "backup" | "printer";
 
 const Settings = () => {
   const store = useStore();
@@ -16,6 +16,7 @@ const Settings = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>("store");
   const [localStore, setLocalStore] = useState({ ...store.storeInfo });
   const [localTax, setLocalTax] = useState({ ...store.taxSettings });
+  const [localLoyalty, setLocalLoyalty] = useState({ ...store.loyaltySettings });
   const [localPrinter, setLocalPrinter] = useState({ ...store.printerSettings });
   const [localNotif, setLocalNotif] = useState({ ...store.notificationSettings });
 
@@ -38,6 +39,7 @@ const Settings = () => {
   const settingsTabs: { key: SettingsTab; label: string; icon: any }[] = [
     { key: "store", label: t(lang, "storeInfo"), icon: Store },
     { key: "tax", label: t(lang, "taxLabel"), icon: Receipt },
+    { key: "loyalty", label: t(lang, "loyaltyLabel"), icon: Star },
     { key: "roles", label: t(lang, "rolesPermissions"), icon: Shield },
     { key: "notifications", label: t(lang, "notificationsLabel"), icon: Bell },
     { key: "printer", label: t(lang, "printerLabel"), icon: Printer },
@@ -49,6 +51,7 @@ const Settings = () => {
     toast({ title: t(localStore.language as any, "storeInfoSaved") });
   };
   const handleSaveTax = () => { store.updateTaxSettings(localTax); toast({ title: t(lang, "taxSaved"), description: `${t(lang, "taxRate")}: ${localTax.rate}%` }); };
+  const handleSaveLoyalty = () => { store.updateLoyaltySettings(localLoyalty); toast({ title: t(lang, "loyaltySaved") }); };
   const handleSavePrinter = () => { store.updatePrinterSettings(localPrinter); toast({ title: t(lang, "printerSaved") }); };
   const handleSaveNotif = () => { store.updateNotificationSettings(localNotif); toast({ title: t(lang, "notifSaved") }); };
 
@@ -93,7 +96,7 @@ const Settings = () => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const result = store.importData(ev.target?.result as string);
-      if (result) { toast({ title: t(lang, "backupRestored") }); setLocalStore({ ...store.storeInfo }); setLocalTax({ ...store.taxSettings }); setLocalPrinter({ ...store.printerSettings }); setLocalNotif({ ...store.notificationSettings }); }
+      if (result) { toast({ title: t(lang, "backupRestored") }); setLocalStore({ ...store.storeInfo }); setLocalTax({ ...store.taxSettings }); setLocalLoyalty({ ...store.loyaltySettings }); setLocalPrinter({ ...store.printerSettings }); setLocalNotif({ ...store.notificationSettings }); }
       else { toast({ title: t(lang, "backupError"), variant: "destructive" }); }
     };
     reader.readAsText(file); e.target.value = "";
@@ -155,6 +158,36 @@ const Settings = () => {
                 <div className="p-3 rounded-xl bg-accent/30 text-sm text-accent-foreground">{t(lang, "taxIncludedNote")}</div>
               </div>
               <Button onClick={handleSaveTax}>{t(lang, "saveTaxSettings")}</Button>
+            </div>
+          )}
+
+          {activeTab === "loyalty" && (
+            <div className="glass-card rounded-xl p-6 space-y-4">
+              <h3 className="text-lg font-semibold text-card-foreground">{t(lang, "loyaltyLabel")}</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 rounded-xl bg-muted/50">
+                  <span className="text-sm text-card-foreground">{t(lang, "enableLoyalty")}</span>
+                  <Switch checked={localLoyalty.enabled} onCheckedChange={v => setLocalLoyalty({ ...localLoyalty, enabled: v })} />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div><label className="text-xs text-muted-foreground">{t(lang, "pointsPerUnit")}</label>
+                    <input type="number" step="0.1" value={localLoyalty.pointsPerUnit} onChange={e => setLocalLoyalty({ ...localLoyalty, pointsPerUnit: Number(e.target.value) })} className={inputClass} />
+                  </div>
+                  <div><label className="text-xs text-muted-foreground">{t(lang, "pointValueLabel")}</label>
+                    <input type="number" step="0.01" value={localLoyalty.pointValue} onChange={e => setLocalLoyalty({ ...localLoyalty, pointValue: Number(e.target.value) })} className={inputClass} />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-muted/50">
+                  <span className="text-sm text-card-foreground">{t(lang, "showOnReceiptLabel")}</span>
+                  <Switch checked={localLoyalty.showOnReceipt} onCheckedChange={v => setLocalLoyalty({ ...localLoyalty, showOnReceipt: v })} />
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-muted/50">
+                  <span className="text-sm text-card-foreground">{t(lang, "allowUnregisteredLabel")}</span>
+                  <Switch checked={localLoyalty.allowUnregistered} onCheckedChange={v => setLocalLoyalty({ ...localLoyalty, allowUnregistered: v })} />
+                </div>
+                <div className="p-3 rounded-xl bg-accent/30 text-sm text-accent-foreground">{t(lang, "loyaltyNote")}</div>
+              </div>
+              <Button onClick={handleSaveLoyalty}>{t(lang, "saveLoyaltySettings")}</Button>
             </div>
           )}
 
