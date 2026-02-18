@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import {
-  LayoutDashboard, ShoppingCart, Package, Users, Truck, BarChart3, Wallet, Settings, ChevronLeft, Store,
+  LayoutDashboard, ShoppingCart, Package, Users, Truck, BarChart3, Wallet, Settings, ChevronLeft, Store, Receipt,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ const AppSidebar = () => {
   const navItems = [
     { label: t(lang, "dashboard"), icon: LayoutDashboard, path: "/" },
     { label: t(lang, "pos"), icon: ShoppingCart, path: "/pos" },
+    { label: t(lang, "salesNav"), icon: Receipt, path: "/sales" },
     { label: t(lang, "products"), icon: Package, path: "/products" },
     { label: t(lang, "customers"), icon: Users, path: "/customers" },
     { label: t(lang, "suppliers"), icon: Truck, path: "/suppliers" },

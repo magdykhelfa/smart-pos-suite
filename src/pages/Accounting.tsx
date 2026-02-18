@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Wallet, TrendingUp, TrendingDown, DollarSign, Building2 } from "lucide-react";
+import { Search, Plus, Wallet, TrendingUp, TrendingDown, DollarSign, Building2 } from "lucide-react";
 import { useStore, Transaction } from "@/store/useStore";
 import { t } from "@/i18n/translations";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,7 @@ const Accounting = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState(emptyTransaction);
   const [activeTab, setActiveTab] = useState<"all" | "expense" | "revenue">("all");
+  const [search, setSearch] = useState("");
 
   const totalRevenue = transactions.filter(t => t.type === "sale" || t.type === "revenue").reduce((s, t) => s + t.amount, 0);
   const totalExpense = transactions.filter(t => t.type === "expense" || t.type === "purchase" || t.type === "salary").reduce((s, t) => s + t.amount, 0);
@@ -42,9 +43,10 @@ const Accounting = () => {
     transactions.filter(t => t.type === "expense" || t.type === "salary").reduce((acc, t) => { acc[t.category] = (acc[t.category] || 0) + t.amount; return acc; }, {} as Record<string, number>)
   ).map(([name, value]) => ({ name, value }));
 
-  const filteredTransactions = activeTab === "all" ? transactions
+  const filteredTransactions = (activeTab === "all" ? transactions
     : activeTab === "revenue" ? transactions.filter(t => t.type === "sale" || t.type === "revenue")
-    : transactions.filter(t => t.type === "expense" || t.type === "purchase" || t.type === "salary");
+    : transactions.filter(t => t.type === "expense" || t.type === "purchase" || t.type === "salary")
+  ).filter(tx => !search || tx.description.toLowerCase().includes(search.toLowerCase()) || tx.category.toLowerCase().includes(search.toLowerCase()));
 
   const openAdd = (type: Transaction["type"]) => {
     setForm({ ...emptyTransaction, type, category: type === "expense" ? "أخرى" : type === "revenue" ? "إيرادات أخرى" : "مبيعات" });
@@ -136,6 +138,11 @@ const Accounting = () => {
                 {tab === "all" ? t(lang, "all") : tab === "revenue" ? t(lang, "revenues") : t(lang, "expenses")}
               </button>
             ))}
+          </div>
+          <div className="relative flex-1 max-w-xs mr-auto">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input type="text" placeholder={t(lang, "searchTransactions")} value={search} onChange={e => setSearch(e.target.value)}
+              className="w-full bg-card border border-border rounded-lg pr-10 pl-4 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
           </div>
         </div>
         <div className="glass-card rounded-xl overflow-hidden">
