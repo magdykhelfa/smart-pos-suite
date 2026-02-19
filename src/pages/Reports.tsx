@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BarChart3, FileText, Package, TrendingUp, Users, Calendar } from "lucide-react";
+import { BarChart3, FileText, Package, TrendingUp, Users, Calendar, Download } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { t } from "@/i18n/translations";
 import { cn } from "@/lib/utils";
@@ -18,7 +18,11 @@ const Reports = () => {
   const lang = storeInfo.language as "العربية" | "English";
   const cur = storeInfo.currency;
   const [activeReport, setActiveReport] = useState<ReportType>("sales");
-  const [dateRange, setDateRange] = useState({ from: "2026-02-01", to: "2026-02-16" });
+  const today = new Date().toISOString().split("T")[0];
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+  const [dateRange, setDateRange] = useState({ from: monthAgo, to: today });
+  const [employeeFilter, setEmployeeFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
 
   const reportTabs: { key: ReportType; label: string; icon: any }[] = [
     { key: "sales", label: t(lang, "sales"), icon: BarChart3 },
@@ -29,19 +33,43 @@ const Reports = () => {
     { key: "invoices", label: t(lang, "invoicesLabel"), icon: FileText },
   ];
 
+  // Real data from invoices
+  const filteredInvoices = invoices.filter(inv => {
+    const invDate = inv.date.includes("T") ? inv.date.split("T")[0] : inv.date.substring(0, 10);
+    const matchDate = invDate >= dateRange.from && invDate <= dateRange.to;
+    const matchEmployee = employeeFilter === "all" || inv.employee === employeeFilter;
+    const matchPayment = paymentFilter === "all" || inv.paymentMethod === paymentFilter;
+    return matchDate && matchEmployee && matchPayment;
+  });
+
   const salesByDay = transactions
     .filter(tx => tx.type === "sale" && tx.date >= dateRange.from && tx.date <= dateRange.to)
     .reduce((acc, tx) => { acc[tx.date] = (acc[tx.date] || 0) + tx.amount; return acc; }, {} as Record<string, number>);
   const salesChartData = Object.entries(salesByDay).map(([date, amount]) => ({ date: date.slice(5), amount })).sort((a, b) => a.date.localeCompare(b.date));
 
-  const productSalesData = products.slice(0, 6).map(p => ({
-    name: p.name.slice(0, 15), sold: Math.floor(Math.random() * 50 + 10),
-    revenue: Math.floor(Math.random() * 50000 + 5000),
-  }));
+  // Real product sales from invoices
+  const productSalesMap: Record<string, { qty: number; revenue: number; cost: number }> = {};
+  filteredInvoices.filter(inv => inv.status !== "ملغاة").forEach(inv => {
+    inv.items.forEach(item => {
+      if (!productSalesMap[item.productId]) productSalesMap[item.productId] = { qty: 0, revenue: 0, cost: 0 };
+      productSalesMap[item.productId].qty += item.qty;
+      productSalesMap[item.productId].revenue += item.qty * item.price;
+      const product = products.find(p => p.id === item.productId);
+      if (product) productSalesMap[item.productId].cost += item.qty * product.buyPrice;
+    });
+  });
+  const productSalesData = Object.entries(productSalesMap)
+    .map(([id, data]) => {
+      const product = products.find(p => p.id === id);
+      return { name: product?.name?.slice(0, 15) || id, ...data };
+    })
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 8);
 
   const profitByCategory = products.reduce((acc, p) => {
-    const profit = (p.sellPrice - p.buyPrice) * p.stock;
-    acc[p.category] = (acc[p.category] || 0) + profit;
+    const sold = productSalesMap[p.id]?.qty || 0;
+    const profit = (p.sellPrice - p.buyPrice) * sold;
+    if (profit > 0) acc[p.category] = (acc[p.category] || 0) + profit;
     return acc;
   }, {} as Record<string, number>);
   const profitPieData = Object.entries(profitByCategory).map(([name, value]) => ({ name, value }));
@@ -52,7 +80,29 @@ const Reports = () => {
 
   const customerRanking = [...customers].sort((a, b) => b.totalPurchases - a.totalPurchases);
 
-  const statusText = (s: string) => s === "مكتملة" ? t(lang, "completed") : s === "معلقة" ? t(lang, "pending") : t(lang, "cancelled");
+  const employees = [...new Set(invoices.map(inv => inv.employee))];
+  const paymentMethods = [...new Set(invoices.map(inv => inv.paymentMethod))];
+
+  const totalSalesAmount = filteredInvoices.filter(inv => inv.status !== "ملغاة" && inv.status !== "مرتجعة").reduce((s, inv) => s + inv.total, 0);
+  const totalCost = Object.values(productSalesMap).reduce((s, d) => s + d.cost, 0);
+  const netProfit = totalSalesAmount - totalCost;
+
+  const statusText = (s: string) => {
+    if (s === "مكتملة") return t(lang, "completed");
+    if (s === "معلقة") return t(lang, "pending");
+    if (s === "مرتجعة") return t(lang, "returned");
+    if (s === "مرتجع جزئي") return t(lang, "partialReturn");
+    return t(lang, "cancelled");
+  };
+
+  const exportCSV = () => {
+    const rows = filteredInvoices.map(inv => `${inv.id},${inv.date},${inv.customer},${inv.total},${inv.paymentMethod},${inv.status}`);
+    const csv = `ID,Date,Customer,Total,Payment,Status\n${rows.join("\n")}`;
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `report-${today}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="p-6 space-y-6" dir={lang === "English" ? "ltr" : "rtl"}>
@@ -63,54 +113,70 @@ const Reports = () => {
           <input type="date" value={dateRange.from} onChange={e => setDateRange(prev => ({ ...prev, from: e.target.value }))} className="bg-card border border-border rounded-lg px-2 py-1.5 text-xs text-foreground" />
           <span className="text-muted-foreground text-xs">{t(lang, "to")}</span>
           <input type="date" value={dateRange.to} onChange={e => setDateRange(prev => ({ ...prev, to: e.target.value }))} className="bg-card border border-border rounded-lg px-2 py-1.5 text-xs text-foreground" />
+          <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-3 h-3 ml-1" />{t(lang, "exportExcel")}</Button>
         </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {reportTabs.map(tab => (
-          <button key={tab.key} onClick={() => setActiveReport(tab.key)}
-            className={cn("flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all",
-              activeReport === tab.key ? "bg-primary text-primary-foreground shadow-md" : "bg-card border border-border text-muted-foreground hover:text-foreground hover:border-primary/30"
-            )}>
-            <tab.icon className="w-4 h-4" />{tab.label}
-          </button>
-        ))}
+      {/* Filters */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {reportTabs.map(tab => (
+            <button key={tab.key} onClick={() => setActiveReport(tab.key)}
+              className={cn("flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all",
+                activeReport === tab.key ? "bg-primary text-primary-foreground shadow-md" : "bg-card border border-border text-muted-foreground hover:text-foreground hover:border-primary/30"
+              )}>
+              <tab.icon className="w-4 h-4" />{tab.label}
+            </button>
+          ))}
+        </div>
+        <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)} className="bg-card border border-border rounded-lg px-2 py-1.5 text-xs text-foreground">
+          <option value="all">{t(lang, "allEmployees")}</option>
+          {employees.map(emp => <option key={emp} value={emp}>{emp}</option>)}
+        </select>
+        <select value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)} className="bg-card border border-border rounded-lg px-2 py-1.5 text-xs text-foreground">
+          <option value="all">{t(lang, "allPayments")}</option>
+          {paymentMethods.map(pm => <option key={pm} value={pm}>{pm}</option>)}
+        </select>
       </div>
 
       {activeReport === "sales" && (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-4">
-            <div className="glass-card rounded-xl p-4"><p className="text-xs text-muted-foreground">{t(lang, "totalSales")}</p><p className="text-2xl font-bold text-card-foreground mt-1">{transactions.filter(tx => tx.type === "sale").reduce((s, tx) => s + tx.amount, 0).toLocaleString()} {cur}</p></div>
-            <div className="glass-card rounded-xl p-4"><p className="text-xs text-muted-foreground">{t(lang, "invoiceCount")}</p><p className="text-2xl font-bold text-card-foreground mt-1">{invoices.length}</p></div>
-            <div className="glass-card rounded-xl p-4"><p className="text-xs text-muted-foreground">{t(lang, "avgInvoice")}</p><p className="text-2xl font-bold text-card-foreground mt-1">{invoices.length ? Math.round(invoices.reduce((s, inv) => s + inv.total, 0) / invoices.length).toLocaleString() : 0} {cur}</p></div>
+            <div className="glass-card rounded-xl p-4"><p className="text-xs text-muted-foreground">{t(lang, "totalSales")}</p><p className="text-2xl font-bold text-card-foreground mt-1">{totalSalesAmount.toLocaleString()} {cur}</p></div>
+            <div className="glass-card rounded-xl p-4"><p className="text-xs text-muted-foreground">{t(lang, "invoiceCount")}</p><p className="text-2xl font-bold text-card-foreground mt-1">{filteredInvoices.length}</p></div>
+            <div className="glass-card rounded-xl p-4"><p className="text-xs text-muted-foreground">{t(lang, "netProfitReport")}</p><p className={cn("text-2xl font-bold mt-1", netProfit >= 0 ? "text-success" : "text-destructive")}>{netProfit.toLocaleString()} {cur}</p></div>
           </div>
           <div className="glass-card rounded-xl p-5">
             <h3 className="text-base font-semibold text-card-foreground mb-4">{t(lang, "dailySales")}</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={salesChartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,13%,91%)" />
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
-                <YAxis tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
-                <Tooltip contentStyle={{ backgroundColor: "hsl(220,25%,9%)", border: "1px solid hsl(220,20%,16%)", borderRadius: "8px", color: "#fff", fontFamily: "Cairo", direction: lang === "English" ? "ltr" : "rtl" }} />
-                <Bar dataKey="amount" fill="hsl(160,84%,39%)" radius={[4, 4, 0, 0]} name={t(lang, "sales")} />
-              </BarChart>
-            </ResponsiveContainer>
+            {salesChartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={salesChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,13%,91%)" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
+                  <YAxis tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
+                  <Tooltip contentStyle={{ backgroundColor: "hsl(220,25%,9%)", border: "1px solid hsl(220,20%,16%)", borderRadius: "8px", color: "#fff", fontFamily: "Cairo", direction: lang === "English" ? "ltr" : "rtl" }} />
+                  <Bar dataKey="amount" fill="hsl(160,84%,39%)" radius={[4, 4, 0, 0]} name={t(lang, "sales")} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="h-[300px] flex items-center justify-center text-muted-foreground">{t(lang, "noDataForPeriod")}</div>}
           </div>
         </div>
       )}
 
       {activeReport === "products" && (
         <div className="glass-card rounded-xl p-5">
-          <h3 className="text-base font-semibold text-card-foreground mb-4">{t(lang, "productPerformance")}</h3>
-          <ResponsiveContainer width="100%" height={350}>
-            <BarChart data={productSalesData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,13%,91%)" />
-              <XAxis type="number" tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
-              <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
-              <Tooltip contentStyle={{ backgroundColor: "hsl(220,25%,9%)", border: "1px solid hsl(220,20%,16%)", borderRadius: "8px", color: "#fff", fontFamily: "Cairo", direction: lang === "English" ? "ltr" : "rtl" }} />
-              <Bar dataKey="revenue" fill="hsl(160,84%,39%)" radius={[0, 4, 4, 0]} name={t(lang, "revenueCol")} />
-            </BarChart>
-          </ResponsiveContainer>
+          <h3 className="text-base font-semibold text-card-foreground mb-4">{t(lang, "topSellingProducts")}</h3>
+          {productSalesData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart data={productSalesData} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,13%,91%)" />
+                <XAxis type="number" tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
+                <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 11 }} stroke="hsl(220,10%,46%)" />
+                <Tooltip contentStyle={{ backgroundColor: "hsl(220,25%,9%)", border: "1px solid hsl(220,20%,16%)", borderRadius: "8px", color: "#fff", fontFamily: "Cairo", direction: lang === "English" ? "ltr" : "rtl" }} />
+                <Bar dataKey="revenue" fill="hsl(160,84%,39%)" radius={[0, 4, 4, 0]} name={t(lang, "revenueCol")} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <div className="h-[350px] flex items-center justify-center text-muted-foreground">{t(lang, "noDataForPeriod")}</div>}
         </div>
       )}
 
@@ -118,17 +184,19 @@ const Reports = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="glass-card rounded-xl p-5">
             <h3 className="text-base font-semibold text-card-foreground mb-4">{t(lang, "profitByCategory")}</h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <PieChart><Pie data={profitPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} innerRadius={60} label={({ name }) => name}>
-                {profitPieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-              </Pie><Tooltip formatter={(v: number) => `${v.toLocaleString()} ${cur}`} /></PieChart>
-            </ResponsiveContainer>
+            {profitPieData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={280}>
+                <PieChart><Pie data={profitPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} innerRadius={60} label={({ name }) => name}>
+                  {profitPieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                </Pie><Tooltip formatter={(v: number) => `${v.toLocaleString()} ${cur}`} /></PieChart>
+              </ResponsiveContainer>
+            ) : <div className="h-[280px] flex items-center justify-center text-muted-foreground">{t(lang, "noDataForPeriod")}</div>}
           </div>
           <div className="glass-card rounded-xl p-5">
             <h3 className="text-base font-semibold text-card-foreground mb-4">{t(lang, "profitMarginPerProduct")}</h3>
             <div className="space-y-3">
               {products.map(p => {
-                const margin = ((p.sellPrice - p.buyPrice) / p.buyPrice * 100);
+                const margin = p.buyPrice > 0 ? ((p.sellPrice - p.buyPrice) / p.buyPrice * 100) : 0;
                 return (
                   <div key={p.id} className="flex items-center gap-3">
                     <span className="text-xs text-muted-foreground w-28 truncate">{p.name}</span>
@@ -203,7 +271,9 @@ const Reports = () => {
               <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "employee")}</th>
             </tr></thead>
             <tbody>
-              {invoices.map((inv, i) => (
+              {filteredInvoices.length === 0 ? (
+                <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">{t(lang, "noDataForPeriod")}</td></tr>
+              ) : filteredInvoices.map((inv, i) => (
                 <tr key={inv.id} className="border-b border-border/50 hover:bg-muted/30 transition-colors animate-fade-in" style={{ animationDelay: `${i * 50}ms` }}>
                   <td className="p-3 text-sm font-mono text-muted-foreground">#{inv.id}</td>
                   <td className="p-3 text-sm text-muted-foreground">{inv.date}</td>

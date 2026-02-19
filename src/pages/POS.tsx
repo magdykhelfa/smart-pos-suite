@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef } from "react";
-import { Search, Plus, Minus, Trash2, CreditCard, Banknote, Smartphone, X, ArrowRight, Pause, Printer, Users, ChevronDown, Star } from "lucide-react";
-import { useStore } from "@/store/useStore";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { Search, Plus, Minus, Trash2, CreditCard, Banknote, Smartphone, X, ArrowRight, Pause, Printer, Users, Star, ShoppingCart } from "lucide-react";
+import { useStore, InvoiceItem } from "@/store/useStore";
 import { t } from "@/i18n/translations";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -8,10 +8,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { toast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
 
-interface CartItem { id: string; name: string; price: number; qty: number; }
+interface CartItem { id: string; name: string; price: number; qty: number; maxStock: number; }
 
 const POS = () => {
-  const { products, customers, addInvoice, addTransaction, updateCustomer, storeInfo, taxSettings, printerSettings, loyaltySettings, categories } = useStore();
+  const store = useStore();
+  const { products, customers, addInvoice, addTransaction, updateCustomer, updateProduct, addInventoryLog, storeInfo, taxSettings, printerSettings, loyaltySettings, categories, currentUser } = store;
   const lang = storeInfo.language as "العربية" | "English";
   const cur = storeInfo.currency;
   const allCategories = [lang === "English" ? "All" : "الكل", ...categories];
@@ -28,7 +29,12 @@ const POS = () => {
   const [suspendedCarts, setSuspendedCarts] = useState<{ name: string; cart: CartItem[]; discount: number }[]>([]);
   const [suspendedOpen, setSuspendedOpen] = useState(false);
   const [redeemPoints, setRedeemPoints] = useState(0);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [receivedAmount, setReceivedAmount] = useState(0);
+  const [invoiceNotes, setInvoiceNotes] = useState("");
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const barcodeBufferRef = useRef("");
+  const barcodeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const posProducts = products.filter(p => p.stock > 0);
   const filteredProducts = posProducts.filter(p => {
@@ -43,16 +49,65 @@ const POS = () => {
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
+  // Barcode scanner - listens for rapid key input globally
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Keyboard shortcuts
+      if (e.key === "F1") { e.preventDefault(); completeSale("كاش"); return; }
+      if (e.key === "F2") { e.preventDefault(); completeSale("بطاقة"); return; }
+      if (e.key === "F3") { e.preventDefault(); completeSale("محفظة"); return; }
+      if (e.key === "F4") { e.preventDefault(); completeSale("آجل"); return; }
+      if (e.key === "F8") { e.preventDefault(); setPaymentOpen(true); return; }
+
+      // Barcode scanner detection
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+      if (e.key === "Enter" && barcodeBufferRef.current.length > 2) {
+        const barcode = barcodeBufferRef.current;
+        barcodeBufferRef.current = "";
+        const product = products.find(p => p.barcode === barcode);
+        if (product && product.stock > 0) {
+          addToCart(product);
+          toast({ title: `📦 ${product.name}` });
+        } else {
+          toast({ title: t(lang, "productNotFound"), variant: "destructive" });
+        }
+        return;
+      }
+
+      if (e.key.length === 1) {
+        barcodeBufferRef.current += e.key;
+        if (barcodeTimerRef.current) clearTimeout(barcodeTimerRef.current);
+        barcodeTimerRef.current = setTimeout(() => { barcodeBufferRef.current = ""; }, 100);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, cart, lang]);
+
   const addToCart = (product: typeof products[0]) => {
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
-      if (existing) return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
-      return [...prev, { id: product.id, name: product.name, price: product.sellPrice, qty: 1 }];
+      if (existing) {
+        if (existing.qty >= product.stock) {
+          toast({ title: t(lang, "insufficientStock"), variant: "destructive" });
+          return prev;
+        }
+        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
+      }
+      return [...prev, { id: product.id, name: product.name, price: product.sellPrice, qty: 1, maxStock: product.stock }];
     });
   };
 
   const updateQty = (id: string, delta: number) => {
-    setCart(prev => prev.map(item => item.id === id ? { ...item, qty: item.qty + delta } : item).filter(item => item.qty > 0));
+    setCart(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const newQty = item.qty + delta;
+      if (newQty > item.maxStock) { toast({ title: t(lang, "insufficientStock"), variant: "destructive" }); return item; }
+      return { ...item, qty: newQty };
+    }).filter(item => item.qty > 0));
   };
 
   const removeItem = (id: string) => setCart(prev => prev.filter(item => item.id !== id));
@@ -95,6 +150,7 @@ const POS = () => {
     ).join("");
     const loyaltyHtml = loyaltySettings.enabled && loyaltySettings.showOnReceipt && receiptData.loyaltyPointsEarned
       ? `<div class="center" style="font-size:10px;margin-top:4px;">⭐ ${t(lang, "pointsEarned")}: ${receiptData.loyaltyPointsEarned}</div>` : "";
+    const notesHtml = receiptData.notes ? `<div style="font-size:10px;margin-top:4px;border-top:1px dashed #000;padding-top:4px;">${receiptData.notes}</div>` : "";
     printWindow.document.write(`
       <html dir="rtl"><head><style>@media print{@page{size:${width} auto;margin:2mm;}}body{font-family:'Cairo',sans-serif;width:${width};margin:0 auto;padding:5mm;font-size:12px;}.center{text-align:center;}.bold{font-weight:bold;}.line{border-top:1px dashed #000;margin:4px 0;}.row{display:flex;justify-content:space-between;}</style></head><body>
         <div class="center bold" style="font-size:16px;">${storeInfo.name}</div>
@@ -102,7 +158,7 @@ const POS = () => {
         <div class="center" style="font-size:10px;">${storeInfo.phone}</div>
         ${storeInfo.taxNumber ? `<div class="center" style="font-size:10px;">${storeInfo.taxNumber}</div>` : ""}
         <div class="line"></div>
-        <div class="row"><span>${receiptData.date}</span></div>
+        <div class="row"><span>#${receiptData.id || ""}</span><span>${receiptData.date}</span></div>
         <div class="row"><span>${receiptData.customer}</span></div>
         <div class="line"></div>${itemsHtml}<div class="line"></div>
         <div class="row"><span>${t(lang, "subtotal")}</span><span>${receiptData.subtotal.toLocaleString()} ${cur}</span></div>
@@ -113,7 +169,7 @@ const POS = () => {
         <div class="row bold" style="font-size:16px;"><span>${t(lang, "grandTotal")}</span><span>${Number(receiptData.total).toLocaleString()} ${cur}</span></div>
         <div class="line"></div>
         <div class="center" style="font-size:10px;">${receiptData.paymentMethod}</div>
-        ${loyaltyHtml}
+        ${loyaltyHtml}${notesHtml}
         <div class="center" style="font-size:10px;margin-top:8px;">${t(lang, "thankYou")}</div>
       </body></html>`);
     printWindow.document.close();
@@ -125,19 +181,42 @@ const POS = () => {
     if (cart.length === 0) { toast({ title: t(lang, "cartEmpty"), variant: "destructive" }); return; }
 
     const shouldAwardPoints = loyaltySettings.enabled && (selectedCustomerId || loyaltySettings.allowUnregistered);
+    const today = new Date().toISOString().split("T")[0];
+    const now = new Date().toLocaleString(lang === "English" ? "en-US" : "ar-EG");
+    const employeeName = currentUser?.name || "الكاشير";
+
+    const invoiceItems: InvoiceItem[] = cart.map(item => ({
+      productId: item.id, name: item.name, qty: item.qty, price: item.price,
+    }));
 
     const invoice = {
-      date: new Date().toLocaleString(lang === "English" ? "en-US" : "ar-EG"),
+      date: now,
       customer: customerName,
-      items: cart.map(item => ({ name: item.name, qty: item.qty, price: item.price })),
+      customerId: selectedCustomerId || undefined,
+      items: invoiceItems,
       subtotal, discount, tax, total, paymentMethod: method,
       status: method === "آجل" ? "معلقة" as const : "مكتملة" as const,
-      employee: "الكاشير",
+      employee: employeeName,
       loyaltyPointsEarned: shouldAwardPoints ? loyaltyPointsToEarn : 0,
       loyaltyPointsRedeemed: redeemPoints > 0 ? redeemPoints : 0,
+      notes: invoiceNotes || undefined,
     };
-    addInvoice(invoice);
-    addTransaction({ date: new Date().toISOString().split("T")[0], type: "sale", category: "مبيعات", amount: total, description: `فاتورة - ${customerName}`, paymentMethod: method, treasury: "الخزنة الرئيسية" });
+    const invoiceId = addInvoice(invoice);
+    addTransaction({ date: today, type: "sale", category: "مبيعات", amount: total, description: `فاتورة #${invoiceId} - ${customerName}`, paymentMethod: method, treasury: "الخزنة الرئيسية" });
+
+    // Deduct stock
+    cart.forEach(item => {
+      const product = products.find(p => p.id === item.id);
+      if (product) {
+        const newStock = product.stock - item.qty;
+        const status = newStock === 0 ? "نفد" : newStock <= product.reorderLevel ? "منخفض" : "متوفر";
+        updateProduct({ ...product, stock: newStock, status });
+        addInventoryLog({
+          date: today, productId: product.id, productName: product.name,
+          type: "sale", qty: -item.qty, previousStock: product.stock, newStock, reference: `INV#${invoiceId}`,
+        });
+      }
+    });
 
     // Update customer loyalty points
     if (selectedCustomer && loyaltySettings.enabled) {
@@ -150,7 +229,7 @@ const POS = () => {
       });
     }
 
-    const receiptData = { ...invoice, total: total.toFixed(2) };
+    const receiptData = { ...invoice, id: invoiceId, total: total.toFixed(2) };
     setLastReceipt(receiptData);
     setReceiptOpen(true);
     if (printerSettings.autoPrint) {
@@ -158,7 +237,7 @@ const POS = () => {
       if (printerSettings.printTwoCopies) setTimeout(() => printReceipt(receiptData), 1000);
     }
     if (printerSettings.openDrawer) toast({ title: t(lang, "cashDrawerOpened") });
-    setCart([]); setDiscount(0); setCustomerName(t(lang, "walkInCustomer")); setSelectedCustomerId(""); setRedeemPoints(0);
+    setCart([]); setDiscount(0); setCustomerName(t(lang, "walkInCustomer")); setSelectedCustomerId(""); setRedeemPoints(0); setInvoiceNotes(""); setPaymentOpen(false);
     toast({ title: t(lang, "saleCompleted") });
   };
 
@@ -193,6 +272,7 @@ const POS = () => {
               <span className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-warning text-warning-foreground text-[10px] flex items-center justify-center font-bold">{suspendedCarts.length}</span>
             </Button>
           )}
+          <div className="text-[9px] text-muted-foreground bg-muted px-2 py-1 rounded-md hidden lg:block">{t(lang, "shortcutPay")}</div>
         </div>
         <div className="px-3 py-2 flex gap-2 overflow-x-auto border-b border-border">
           {allCategories.map(cat => (
@@ -247,7 +327,6 @@ const POS = () => {
           )}
         </div>
 
-        {/* Customer dropdown */}
         <Dialog open={showCustomerDropdown} onOpenChange={setShowCustomerDropdown}>
           <DialogContent className="max-w-sm">
             <DialogHeader><DialogTitle>{t(lang, "registeredCustomers")}</DialogTitle><DialogDescription>{t(lang, "selectCustomer")}</DialogDescription></DialogHeader>
@@ -300,18 +379,46 @@ const POS = () => {
               <div className="flex justify-between text-xs text-primary"><span>⭐ {t(lang, "pointsEarned")}</span><span>+{loyaltyPointsToEarn}</span></div>
             )}
           </div>
-          <div className="grid grid-cols-4 gap-1.5">
-            <Button onClick={() => completeSale("كاش")} className="flex-col h-12 gap-0.5 text-[10px]"><Banknote className="w-4 h-4" />{t(lang, "cash")}</Button>
-            <Button variant="secondary" onClick={() => completeSale("بطاقة")} className="flex-col h-12 gap-0.5 text-[10px]"><CreditCard className="w-4 h-4" />{t(lang, "card")}</Button>
-            <Button variant="secondary" onClick={() => completeSale("محفظة")} className="flex-col h-12 gap-0.5 text-[10px]"><Smartphone className="w-4 h-4" />{t(lang, "wallet")}</Button>
-            <Button variant="secondary" onClick={() => completeSale("آجل")} className="flex-col h-12 gap-0.5 text-[10px]">💳{t(lang, "credit")}</Button>
+          <div>
+            <input value={invoiceNotes} onChange={e => setInvoiceNotes(e.target.value)} placeholder={t(lang, "invoiceNotes")}
+              className="w-full bg-muted border-0 rounded-md px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 mb-2" />
           </div>
+          <Button className="w-full h-12" onClick={() => setPaymentOpen(true)} disabled={cart.length === 0}>
+            <ShoppingCart className="w-4 h-4 ml-2" />{t(lang, "paymentDialog")} - {total.toFixed(0)} {cur}
+          </Button>
           <div className="grid grid-cols-2 gap-2">
             <Button variant="outline" className="text-xs" onClick={suspendCart}><Pause className="w-3 h-3 ml-1" />{t(lang, "suspend")}</Button>
             <Button variant="destructive" className="text-xs" onClick={() => { setCart([]); setDiscount(0); }}><X className="w-3 h-3 ml-1" />{t(lang, "cancel")}</Button>
           </div>
         </div>
       </div>
+
+      {/* Payment Dialog */}
+      <Dialog open={paymentOpen} onOpenChange={setPaymentOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>{t(lang, "paymentDialog")}</DialogTitle><DialogDescription>{t(lang, "paymentDialogDesc")}</DialogDescription></DialogHeader>
+          <div className="space-y-4">
+            <div className="text-center p-4 bg-muted rounded-xl">
+              <p className="text-sm text-muted-foreground">{t(lang, "grandTotal")}</p>
+              <p className="text-3xl font-bold text-primary">{total.toFixed(0)} {cur}</p>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">{t(lang, "receivedAmount")}</label>
+              <input type="number" value={receivedAmount || ""} onChange={e => setReceivedAmount(Number(e.target.value))}
+                className="w-full bg-muted border-0 rounded-lg px-3 py-2.5 text-lg font-bold text-center text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              {receivedAmount > total && (
+                <p className="text-center text-sm text-success mt-1">{t(lang, "changeAmount")}: {(receivedAmount - total).toFixed(0)} {cur}</p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button onClick={() => completeSale("كاش")} className="h-14 flex-col gap-1"><Banknote className="w-5 h-5" />{t(lang, "cash")}</Button>
+              <Button variant="secondary" onClick={() => completeSale("بطاقة")} className="h-14 flex-col gap-1"><CreditCard className="w-5 h-5" />{t(lang, "card")}</Button>
+              <Button variant="secondary" onClick={() => completeSale("محفظة")} className="h-14 flex-col gap-1"><Smartphone className="w-5 h-5" />{t(lang, "wallet")}</Button>
+              <Button variant="outline" onClick={() => completeSale("آجل")} className="h-14 flex-col gap-1">💳 {t(lang, "credit")}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={receiptOpen} onOpenChange={setReceiptOpen}>
         <DialogContent className="max-w-sm">
@@ -321,7 +428,7 @@ const POS = () => {
               <div className="text-center border-b border-dashed border-border pb-3">
                 <p className="font-bold text-card-foreground">{storeInfo.name}</p>
                 <p className="text-xs text-muted-foreground">{storeInfo.address}</p>
-                <p className="text-xs text-muted-foreground">{lastReceipt.date}</p>
+                <p className="text-xs text-muted-foreground">#{lastReceipt.id} • {lastReceipt.date}</p>
                 <p className="text-xs text-muted-foreground">{t(lang, "customerLabel")} {lastReceipt.customer}</p>
               </div>
               <div className="space-y-1">
