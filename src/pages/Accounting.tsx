@@ -61,7 +61,7 @@ const Accounting = () => {
   };
 
   const typeLabel = (type: string) => {
-    const map: Record<string, string> = { sale: t(lang, "salesLabel"), expense: t(lang, "expenseLabel"), revenue: t(lang, "revenueLabel"), purchase: t(lang, "purchasesLabel"), salary: t(lang, "salaryLabel") };
+    const map: Record<string, string> = { sale: t(lang, "salesLabel"), expense: t(lang, "expenseLabel"), revenue: t(lang, "revenueLabel"), purchase: t(lang, "purchasesLabel"), salary: t(lang, "salaryLabel"), return: t(lang, "returnLabel") };
     return map[type] || type;
   };
 

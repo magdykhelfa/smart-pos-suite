@@ -8,7 +8,7 @@ import { useStore, ALL_PERMISSIONS, Role, SystemUser } from "@/store/useStore";
 import { t } from "@/i18n/translations";
 import { Switch } from "@/components/ui/switch";
 
-type SettingsTab = "store" | "tax" | "loyalty" | "roles" | "notifications" | "backup" | "printer";
+type SettingsTab = "store" | "tax" | "loyalty" | "roles" | "notifications" | "backup" | "printer" | "general";
 
 const Settings = () => {
   const store = useStore();

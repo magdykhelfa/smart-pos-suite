@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
-import { Search, Edit, Printer, RotateCcw, Eye, X } from "lucide-react";
-import { useStore, Invoice } from "@/store/useStore";
+import { Search, Edit, Printer, RotateCcw, Eye, X, FileText } from "lucide-react";
+import { useStore, Invoice, InvoiceItem } from "@/store/useStore";
 import { t } from "@/i18n/translations";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,11 @@ const Sales = () => {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
   const [editInvoice, setEditInvoice] = useState<Invoice | null>(null);
-  const [editItems, setEditItems] = useState<Invoice["items"]>([]);
+  const [editItems, setEditItems] = useState<InvoiceItem[]>([]);
   const [editDiscount, setEditDiscount] = useState(0);
   const [returnDialogOpen, setReturnDialogOpen] = useState(false);
   const [returnInvoice, setReturnInvoice] = useState<Invoice | null>(null);
+  const [returnQtys, setReturnQtys] = useState<number[]>([]);
 
   const filtered = store.invoices.filter(inv => {
     const matchesSearch = inv.id.includes(search) || inv.customer.includes(search);
@@ -31,6 +32,7 @@ const Sales = () => {
     { value: "مكتملة", label: t(lang, "completed") },
     { value: "معلقة", label: t(lang, "pending") },
     { value: "مرتجعة", label: t(lang, "returned") },
+    { value: "مرتجع جزئي", label: t(lang, "partialReturn") },
     { value: "ملغاة", label: t(lang, "cancelled") },
   ];
 
@@ -38,12 +40,14 @@ const Sales = () => {
     if (s === "مكتملة") return "bg-success/10 text-success border-success/20";
     if (s === "معلقة") return "bg-warning/10 text-warning border-warning/20";
     if (s === "مرتجعة") return "bg-info/10 text-info border-info/20";
+    if (s === "مرتجع جزئي") return "bg-info/10 text-info border-info/20";
     return "bg-destructive/10 text-destructive border-destructive/20";
   };
   const statusLabel = (s: string) => {
     if (s === "مكتملة") return t(lang, "completed");
     if (s === "معلقة") return t(lang, "pending");
     if (s === "مرتجعة") return t(lang, "returned");
+    if (s === "مرتجع جزئي") return t(lang, "partialReturn");
     return t(lang, "cancelled");
   };
 
@@ -66,13 +70,30 @@ const Sales = () => {
       tax = (subtotal - discountAmount) * taxRate;
       total = subtotal - discountAmount + tax;
     }
+
+    // Restore old stock, then deduct new stock
+    editInvoice.items.forEach(oldItem => {
+      const product = store.products.find(p => p.id === oldItem.productId);
+      if (product) {
+        const newStock = product.stock + oldItem.qty;
+        store.updateProduct({ ...product, stock: newStock, status: newStock === 0 ? "نفد" : newStock <= product.reorderLevel ? "منخفض" : "متوفر" });
+      }
+    });
+    editItems.forEach(newItem => {
+      const product = store.products.find(p => p.id === newItem.productId);
+      if (product) {
+        const currentStock = product.stock + (editInvoice.items.find(i => i.productId === newItem.productId)?.qty || 0);
+        const newStock = currentStock - newItem.qty;
+        store.updateProduct({ ...product, stock: newStock, status: newStock === 0 ? "نفد" : newStock <= product.reorderLevel ? "منخفض" : "متوفر" });
+      }
+    });
+
     const updated: Invoice = { ...editInvoice, items: editItems, subtotal, discount: editDiscount, tax, total };
     store.updateInvoice(updated);
-    // Adjust transaction
     const diff = updated.total - editInvoice.total;
     if (diff !== 0) {
       store.addTransaction({
-        date: new Date().toISOString().split("T")[0], type: diff > 0 ? "sale" : "expense",
+        date: new Date().toISOString().split("T")[0], type: diff > 0 ? "sale" : "return",
         category: t(lang, "invoiceEdit"), amount: Math.abs(diff),
         description: `${t(lang, "invoiceEditDesc")} #${editInvoice.id}`,
         paymentMethod: editInvoice.paymentMethod, treasury: "الخزنة الرئيسية",
@@ -83,29 +104,75 @@ const Sales = () => {
   };
 
   const openReturn = (inv: Invoice) => {
+    if (inv.status === "مرتجعة") {
+      toast({ title: t(lang, "alreadyReturned"), variant: "destructive" });
+      return;
+    }
     setReturnInvoice(inv);
+    setReturnQtys(inv.items.map(item => {
+      const maxReturn = item.qty - (item.returnedQty || 0);
+      return maxReturn;
+    }));
     setReturnDialogOpen(true);
   };
 
   const processReturn = () => {
     if (!returnInvoice) return;
-    store.updateInvoice({ ...returnInvoice, status: "مرتجعة" });
+    const returnItems: { productId: string; name: string; qty: number }[] = [];
+    let returnTotal = 0;
+
+    returnInvoice.items.forEach((item, i) => {
+      const qty = returnQtys[i];
+      if (qty > 0) {
+        returnItems.push({ productId: item.productId, name: item.name, qty });
+        returnTotal += qty * item.price;
+      }
+    });
+
+    if (returnItems.length === 0) return;
+
+    // Apply tax to return amount
+    const taxRate = store.taxSettings.enabled ? store.taxSettings.rate / 100 : 0;
+    const discountFactor = 1 - (returnInvoice.discount / 100);
+    let returnAmountWithTax: number;
+    if (store.taxSettings.includedInPrice) {
+      returnAmountWithTax = returnTotal * discountFactor;
+    } else {
+      returnAmountWithTax = returnTotal * discountFactor * (1 + taxRate);
+    }
+
+    // Update invoice items with returnedQty
+    const updatedItems = returnInvoice.items.map((item, i) => ({
+      ...item,
+      returnedQty: (item.returnedQty || 0) + returnQtys[i],
+    }));
+
+    const allFullyReturned = updatedItems.every(item => (item.returnedQty || 0) >= item.qty);
+    const newStatus = allFullyReturned ? "مرتجعة" as const : "مرتجع جزئي" as const;
+
+    store.updateInvoice({ ...returnInvoice, items: updatedItems, status: newStatus });
     store.addTransaction({
-      date: new Date().toISOString().split("T")[0], type: "expense",
-      category: t(lang, "returnCategory"), amount: returnInvoice.total,
+      date: new Date().toISOString().split("T")[0], type: "return",
+      category: t(lang, "returnCategory"), amount: returnAmountWithTax,
       description: `${t(lang, "returnDesc")} #${returnInvoice.id}`,
       paymentMethod: returnInvoice.paymentMethod, treasury: "الخزنة الرئيسية",
     });
+
     // Restore stock
-    returnInvoice.items.forEach(item => {
-      const product = store.products.find(p => p.name === item.name);
+    returnItems.forEach(item => {
+      const product = store.products.find(p => p.id === item.productId);
       if (product) {
         const newStock = product.stock + item.qty;
         store.updateProduct({ ...product, stock: newStock, status: newStock === 0 ? "نفد" : newStock <= product.reorderLevel ? "منخفض" : "متوفر" });
+        store.addInventoryLog({
+          date: new Date().toISOString().split("T")[0], productId: product.id, productName: product.name,
+          type: "return", qty: item.qty, previousStock: product.stock, newStock, reference: `RET#${returnInvoice.id}`,
+        });
       }
     });
-    // Reverse loyalty points if applicable
-    if (returnInvoice.loyaltyPointsEarned) {
+
+    // Reverse loyalty points
+    if (returnInvoice.loyaltyPointsEarned && allFullyReturned) {
       const customer = store.customers.find(c => c.name === returnInvoice.customer);
       if (customer) {
         store.updateCustomer({ ...customer, loyaltyPoints: Math.max(0, customer.loyaltyPoints - returnInvoice.loyaltyPointsEarned) });
@@ -138,6 +205,7 @@ const Sales = () => {
         <div class="line"></div>
         <div class="row bold" style="font-size:16px;"><span>${t(lang, "grandTotal")}</span><span>${Number(inv.total).toLocaleString()} ${cur}</span></div>
         ${inv.status === "مرتجعة" ? `<div class="center bold" style="color:red;font-size:14px;margin-top:8px;">${t(lang, "returned")}</div>` : ""}
+        ${inv.notes ? `<div style="font-size:10px;margin-top:4px;">${inv.notes}</div>` : ""}
         <div class="line"></div>
         <div class="center" style="font-size:10px;">${inv.paymentMethod}</div>
         <div class="center" style="font-size:10px;margin-top:8px;">${t(lang, "thankYou")}</div>
@@ -147,8 +215,8 @@ const Sales = () => {
     setTimeout(() => { printWindow.print(); printWindow.close(); }, 300);
   }, [store.printerSettings.type, store.storeInfo, store.taxSettings, cur, lang]);
 
-  const totalSales = store.invoices.filter(i => i.status === "مكتملة").reduce((s, i) => s + i.total, 0);
-  const totalReturns = store.invoices.filter(i => i.status === "مرتجعة").reduce((s, i) => s + i.total, 0);
+  const totalSales = store.invoices.filter(i => i.status === "مكتملة" || i.status === "مرتجع جزئي").reduce((s, i) => s + i.total, 0);
+  const totalReturns = store.transactions.filter(tx => tx.type === "return").reduce((s, tx) => s + tx.amount, 0);
   const netSales = totalSales - totalReturns;
 
   return (
@@ -192,7 +260,9 @@ const Sales = () => {
             <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "actions")}</th>
           </tr></thead>
           <tbody>
-            {filtered.map((inv, i) => (
+            {filtered.length === 0 ? (
+              <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">{t(lang, "noDataForPeriod")}</td></tr>
+            ) : filtered.map((inv, i) => (
               <tr key={inv.id} className="border-b border-border/50 hover:bg-muted/30 transition-colors animate-fade-in" style={{ animationDelay: `${i * 30}ms` }}>
                 <td className="p-3 text-sm font-mono text-muted-foreground">#{inv.id}</td>
                 <td className="p-3 text-sm text-muted-foreground">{inv.date}</td>
@@ -204,9 +274,9 @@ const Sales = () => {
                 <td className="p-3">
                   <div className="flex items-center gap-1">
                     <button onClick={() => setViewInvoice(inv)} className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"><Eye className="w-4 h-4" /></button>
-                    {inv.status === "مكتملة" && <button onClick={() => openEdit(inv)} className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"><Edit className="w-4 h-4" /></button>}
+                    {(inv.status === "مكتملة" || inv.status === "مرتجع جزئي") && <button onClick={() => openEdit(inv)} className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"><Edit className="w-4 h-4" /></button>}
                     <button onClick={() => printInvoice(inv)} className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"><Printer className="w-4 h-4" /></button>
-                    {(inv.status === "مكتملة" || inv.status === "معلقة") && <button onClick={() => openReturn(inv)} className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"><RotateCcw className="w-4 h-4" /></button>}
+                    {inv.status !== "مرتجعة" && inv.status !== "ملغاة" && <button onClick={() => openReturn(inv)} className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"><RotateCcw className="w-4 h-4" /></button>}
                   </div>
                 </td>
               </tr>
@@ -224,7 +294,10 @@ const Sales = () => {
               <div className="bg-muted/50 rounded-lg p-3"><p className="text-xs text-muted-foreground">{t(lang, "customer")}</p><p className="font-medium text-card-foreground">{viewInvoice.customer}</p></div>
               <div className="space-y-1">
                 {viewInvoice.items.map((item, i) => (
-                  <div key={i} className="flex justify-between p-2 bg-muted/30 rounded-lg"><span className="text-muted-foreground">{item.name} × {item.qty}</span><span className="text-card-foreground font-medium">{(item.price * item.qty).toLocaleString()} {cur}</span></div>
+                  <div key={i} className="flex justify-between p-2 bg-muted/30 rounded-lg">
+                    <span className="text-muted-foreground">{item.name} × {item.qty}{item.returnedQty ? ` (${t(lang, "returned")}: ${item.returnedQty})` : ""}</span>
+                    <span className="text-card-foreground font-medium">{(item.price * item.qty).toLocaleString()} {cur}</span>
+                  </div>
                 ))}
               </div>
               <div className="border-t border-border pt-2 space-y-1">
@@ -233,7 +306,8 @@ const Sales = () => {
                 <div className="flex justify-between text-muted-foreground"><span>{t(lang, "tax")}</span><span>{Number(viewInvoice.tax).toFixed(2)} {cur}</span></div>
                 <div className="flex justify-between text-lg font-bold text-card-foreground border-t border-border pt-2"><span>{t(lang, "grandTotal")}</span><span>{Number(viewInvoice.total).toLocaleString()} {cur}</span></div>
               </div>
-              {viewInvoice.loyaltyPointsEarned && <div className="text-xs text-primary">{t(lang, "pointsEarned")}: {viewInvoice.loyaltyPointsEarned}</div>}
+              {viewInvoice.notes && <div className="p-2 bg-muted/30 rounded-lg text-xs text-muted-foreground">{viewInvoice.notes}</div>}
+              {viewInvoice.loyaltyPointsEarned ? <div className="text-xs text-primary">{t(lang, "pointsEarned")}: {viewInvoice.loyaltyPointsEarned}</div> : null}
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => printInvoice(viewInvoice)}><Printer className="w-4 h-4 ml-1" />{t(lang, "print")}</Button>
                 <Button variant="outline" onClick={() => setViewInvoice(null)}>{t(lang, "close")}</Button>
@@ -272,20 +346,40 @@ const Sales = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Return Dialog */}
+      {/* Partial Return Dialog */}
       <Dialog open={returnDialogOpen} onOpenChange={setReturnDialogOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>{t(lang, "confirmReturn")}</DialogTitle><DialogDescription>{t(lang, "confirmReturnDesc")} #{returnInvoice?.id}</DialogDescription></DialogHeader>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>{t(lang, "partialReturnTitle")}</DialogTitle><DialogDescription>{t(lang, "partialReturnDesc")} #{returnInvoice?.id}</DialogDescription></DialogHeader>
           {returnInvoice && (
-            <div className="space-y-2 text-sm">
-              <p className="text-muted-foreground">{t(lang, "returnAmount")}: <span className="font-bold text-destructive">{returnInvoice.total.toLocaleString()} {cur}</span></p>
+            <div className="space-y-3">
+              {returnInvoice.items.map((item, i) => {
+                const maxReturn = item.qty - (item.returnedQty || 0);
+                if (maxReturn <= 0) return (
+                  <div key={i} className="flex items-center gap-2 p-2 bg-muted/20 rounded-lg opacity-50">
+                    <span className="flex-1 text-sm text-muted-foreground line-through">{item.name}</span>
+                    <span className="text-xs text-muted-foreground">{t(lang, "returned")}</span>
+                  </div>
+                );
+                return (
+                  <div key={i} className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg">
+                    <span className="flex-1 text-sm text-card-foreground">{item.name} (×{item.qty})</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-muted-foreground">{t(lang, "returnQty")}:</span>
+                      <input type="number" min={0} max={maxReturn} value={returnQtys[i] || 0}
+                        onChange={e => { const q = [...returnQtys]; q[i] = Math.min(Number(e.target.value), maxReturn); setReturnQtys(q); }}
+                        className="w-14 bg-muted border-0 rounded-md px-2 py-1 text-sm text-center text-foreground" />
+                      <span className="text-[10px] text-muted-foreground">/ {maxReturn}</span>
+                    </div>
+                  </div>
+                );
+              })}
               <p className="text-xs text-muted-foreground">{t(lang, "returnNote")}</p>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setReturnDialogOpen(false)}>{t(lang, "cancel")}</Button>
+                <Button variant="destructive" onClick={processReturn}>{t(lang, "processReturn")}</Button>
+              </DialogFooter>
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setReturnDialogOpen(false)}>{t(lang, "cancel")}</Button>
-            <Button variant="destructive" onClick={processReturn}>{t(lang, "processReturn")}</Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

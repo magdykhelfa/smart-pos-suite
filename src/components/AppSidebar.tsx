@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import {
-  LayoutDashboard, ShoppingCart, Package, Users, Truck, BarChart3, Wallet, Settings, ChevronLeft, Store, Receipt,
+  LayoutDashboard, ShoppingCart, Package, Users, Truck, BarChart3, Wallet, Settings, ChevronLeft, Store, Receipt, LogOut,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,7 @@ import { t } from "@/i18n/translations";
 const AppSidebar = () => {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
-  const { storeInfo } = useStore();
+  const { storeInfo, currentUser, logout } = useStore();
   const lang = storeInfo.language as "العربية" | "English";
 
   const navItems = [
@@ -59,6 +59,14 @@ const AppSidebar = () => {
         })}
       </nav>
 
+      {currentUser && !collapsed && (
+        <div className="px-3 py-2 border-t border-sidebar-border">
+          <p className="text-xs text-sidebar-foreground truncate">{currentUser.name}</p>
+          <button onClick={logout} className="flex items-center gap-2 text-xs text-destructive hover:text-destructive/80 mt-1">
+            <LogOut className="w-3 h-3" />{t(lang, "logout")}
+          </button>
+        </div>
+      )}
       <button onClick={() => setCollapsed(!collapsed)}
         className="h-12 flex items-center justify-center border-t border-sidebar-border text-sidebar-foreground hover:text-primary transition-colors">
         <ChevronLeft className={cn("w-5 h-5 transition-transform duration-300", collapsed && "rotate-180")} />

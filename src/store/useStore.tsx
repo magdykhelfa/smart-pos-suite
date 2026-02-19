@@ -12,6 +12,9 @@ export interface Product {
   stock: number;
   reorderLevel: number;
   status: string;
+  unit?: string;
+  subUnits?: { name: string; factor: number; price: number }[];
+  image?: string;
 }
 
 export interface Customer {
@@ -41,7 +44,7 @@ export interface Supplier {
 export interface Transaction {
   id: string;
   date: string;
-  type: "sale" | "expense" | "revenue" | "purchase" | "salary";
+  type: "sale" | "expense" | "revenue" | "purchase" | "salary" | "return";
   category: string;
   amount: number;
   description: string;
@@ -49,20 +52,51 @@ export interface Transaction {
   treasury: string;
 }
 
+export interface InvoiceItem {
+  productId: string;
+  name: string;
+  qty: number;
+  price: number;
+  returnedQty?: number;
+}
+
 export interface Invoice {
   id: string;
   date: string;
   customer: string;
-  items: { name: string; qty: number; price: number }[];
+  customerId?: string;
+  items: InvoiceItem[];
   subtotal: number;
   discount: number;
   tax: number;
   total: number;
   paymentMethod: string;
-  status: "مكتملة" | "معلقة" | "ملغاة" | "مرتجعة";
+  status: "مكتملة" | "معلقة" | "ملغاة" | "مرتجعة" | "مرتجع جزئي" | "مدفوع جزئي";
   employee: string;
   loyaltyPointsEarned?: number;
   loyaltyPointsRedeemed?: number;
+  notes?: string;
+  paidAmount?: number;
+}
+
+export interface InventoryLog {
+  id: string;
+  date: string;
+  productId: string;
+  productName: string;
+  type: "sale" | "purchase" | "return" | "adjustment";
+  qty: number;
+  previousStock: number;
+  newStock: number;
+  reference?: string;
+}
+
+export interface AuditLog {
+  id: string;
+  date: string;
+  user: string;
+  action: string;
+  details: string;
 }
 
 export interface StoreInfo {
@@ -83,8 +117,8 @@ export interface TaxSettings {
 
 export interface LoyaltySettings {
   enabled: boolean;
-  pointsPerUnit: number; // points earned per currency unit spent
-  pointValue: number; // currency value of each point when redeemed
+  pointsPerUnit: number;
+  pointValue: number;
   showOnReceipt: boolean;
   allowUnregistered: boolean;
 }
@@ -108,6 +142,12 @@ export interface BackupSettings {
   autoBackup: boolean;
   backupTime: string;
   lastBackup: string;
+}
+
+export interface GeneralSettings {
+  enableQrCode: boolean;
+  enableBarcode: boolean;
+  screenLockTimeout: number;
 }
 
 export interface Permission {
@@ -147,14 +187,14 @@ export interface SystemUser {
 
 // Initial Data
 const initialProducts: Product[] = [
-  { id: "1", name: "آيفون 15 برو", sku: "IPH-15P", barcode: "1001", category: "هواتف", buyPrice: 1200, sellPrice: 1450, stock: 25, reorderLevel: 10, status: "متوفر" },
-  { id: "2", name: "سماعة ايربودز برو", sku: "APD-PRO", barcode: "1002", category: "إكسسوارات", buyPrice: 180, sellPrice: 250, stock: 48, reorderLevel: 20, status: "متوفر" },
-  { id: "3", name: "شاحن سريع 65W", sku: "CHR-65W", barcode: "1003", category: "إكسسوارات", buyPrice: 60, sellPrice: 100, stock: 5, reorderLevel: 15, status: "منخفض" },
-  { id: "4", name: "كفر حماية شفاف", sku: "CSE-CLR", barcode: "1004", category: "إكسسوارات", buyPrice: 20, sellPrice: 50, stock: 200, reorderLevel: 30, status: "متوفر" },
-  { id: "5", name: "كابل تايب سي 2م", sku: "CBL-TC2", barcode: "1005", category: "كابلات", buyPrice: 12, sellPrice: 30, stock: 0, reorderLevel: 50, status: "نفد" },
-  { id: "6", name: "سامسونج S24 الترا", sku: "SAM-S24", barcode: "1006", category: "هواتف", buyPrice: 1100, sellPrice: 1350, stock: 18, reorderLevel: 8, status: "متوفر" },
-  { id: "7", name: "تابلت آيباد اير", sku: "IPD-AIR", barcode: "1007", category: "أجهزة لوحية", buyPrice: 650, sellPrice: 850, stock: 3, reorderLevel: 5, status: "منخفض" },
-  { id: "8", name: "ساعة أبل الترا", sku: "AWU-001", barcode: "1008", category: "ساعات", buyPrice: 750, sellPrice: 950, stock: 15, reorderLevel: 5, status: "متوفر" },
+  { id: "1", name: "آيفون 15 برو", sku: "IPH-15P", barcode: "1001", category: "هواتف", buyPrice: 1200, sellPrice: 1450, stock: 25, reorderLevel: 10, status: "متوفر", unit: "قطعة" },
+  { id: "2", name: "سماعة ايربودز برو", sku: "APD-PRO", barcode: "1002", category: "إكسسوارات", buyPrice: 180, sellPrice: 250, stock: 48, reorderLevel: 20, status: "متوفر", unit: "قطعة" },
+  { id: "3", name: "شاحن سريع 65W", sku: "CHR-65W", barcode: "1003", category: "إكسسوارات", buyPrice: 60, sellPrice: 100, stock: 5, reorderLevel: 15, status: "منخفض", unit: "قطعة" },
+  { id: "4", name: "كفر حماية شفاف", sku: "CSE-CLR", barcode: "1004", category: "إكسسوارات", buyPrice: 20, sellPrice: 50, stock: 200, reorderLevel: 30, status: "متوفر", unit: "قطعة" },
+  { id: "5", name: "كابل تايب سي 2م", sku: "CBL-TC2", barcode: "1005", category: "كابلات", buyPrice: 12, sellPrice: 30, stock: 0, reorderLevel: 50, status: "نفد", unit: "قطعة" },
+  { id: "6", name: "سامسونج S24 الترا", sku: "SAM-S24", barcode: "1006", category: "هواتف", buyPrice: 1100, sellPrice: 1350, stock: 18, reorderLevel: 8, status: "متوفر", unit: "قطعة" },
+  { id: "7", name: "تابلت آيباد اير", sku: "IPD-AIR", barcode: "1007", category: "أجهزة لوحية", buyPrice: 650, sellPrice: 850, stock: 3, reorderLevel: 5, status: "منخفض", unit: "قطعة" },
+  { id: "8", name: "ساعة أبل الترا", sku: "AWU-001", barcode: "1008", category: "ساعات", buyPrice: 750, sellPrice: 950, stock: 15, reorderLevel: 5, status: "متوفر", unit: "قطعة" },
 ];
 
 const initialCustomers: Customer[] = [
@@ -171,23 +211,9 @@ const initialSuppliers: Supplier[] = [
   { id: "3", name: "شركة سمارت للتوزيع", phone: "0138765432", address: "الدمام - المنطقة الحرة", email: "orders@smartdist.sa", creditLimit: 75000, balance: 0, notes: "أجهزة لوحية وساعات" },
 ];
 
-const initialTransactions: Transaction[] = [
-  { id: "1", date: "2026-02-16", type: "sale", category: "مبيعات", amount: 12450, description: "مبيعات اليوم", paymentMethod: "كاش", treasury: "الخزنة الرئيسية" },
-  { id: "2", date: "2026-02-16", type: "expense", category: "إيجار", amount: 5000, description: "إيجار المحل - فبراير", paymentMethod: "تحويل", treasury: "الحساب البنكي" },
-  { id: "3", date: "2026-02-15", type: "sale", category: "مبيعات", amount: 9800, description: "مبيعات أمس", paymentMethod: "كاش", treasury: "الخزنة الرئيسية" },
-  { id: "4", date: "2026-02-15", type: "expense", category: "رواتب", amount: 8000, description: "راتب موظف كاشير", paymentMethod: "تحويل", treasury: "الحساب البنكي" },
-  { id: "5", date: "2026-02-14", type: "purchase", category: "مشتريات", amount: 25000, description: "شحنة هواتف آيفون", paymentMethod: "تحويل", treasury: "الحساب البنكي" },
-  { id: "6", date: "2026-02-14", type: "revenue", category: "إيرادات أخرى", amount: 500, description: "بيع كرتون فارغة", paymentMethod: "كاش", treasury: "الخزنة الرئيسية" },
-  { id: "7", date: "2026-02-13", type: "expense", category: "كهرباء", amount: 1200, description: "فاتورة الكهرباء", paymentMethod: "تحويل", treasury: "الحساب البنكي" },
-  { id: "8", date: "2026-02-13", type: "sale", category: "مبيعات", amount: 15600, description: "مبيعات", paymentMethod: "بطاقة", treasury: "الخزنة الرئيسية" },
-];
+const initialTransactions: Transaction[] = [];
 
-const initialInvoices: Invoice[] = [
-  { id: "1047", date: "2026-02-16 14:30", customer: "أحمد محمد", items: [{ name: "آيفون 15 برو", qty: 1, price: 1450 }], subtotal: 1450, discount: 0, tax: 217.5, total: 1667.5, paymentMethod: "كاش", status: "مكتملة", employee: "محمد الكاشير" },
-  { id: "1046", date: "2026-02-16 13:15", customer: "فاطمة علي", items: [{ name: "سماعة ايربودز برو", qty: 1, price: 250 }, { name: "كفر حماية شفاف", qty: 2, price: 50 }], subtotal: 350, discount: 0, tax: 52.5, total: 402.5, paymentMethod: "بطاقة", status: "مكتملة", employee: "محمد الكاشير" },
-  { id: "1045", date: "2026-02-16 12:00", customer: "عميل عابر", items: [{ name: "شاحن سريع 65W", qty: 1, price: 100 }], subtotal: 100, discount: 10, tax: 13.5, total: 103.5, paymentMethod: "كاش", status: "مكتملة", employee: "سارة" },
-  { id: "1044", date: "2026-02-16 10:45", customer: "خالد سعيد", items: [{ name: "سامسونج S24 الترا", qty: 2, price: 1350 }], subtotal: 2700, discount: 5, tax: 384.75, total: 2949.75, paymentMethod: "آجل", status: "معلقة", employee: "محمد الكاشير" },
-];
+const initialInvoices: Invoice[] = [];
 
 const initialCategories: string[] = ["هواتف", "إكسسوارات", "كابلات", "أجهزة لوحية", "ساعات", "كمبيوتر"];
 
@@ -232,14 +258,18 @@ interface StoreContextType {
   transactions: Transaction[];
   invoices: Invoice[];
   categories: string[];
+  inventoryLogs: InventoryLog[];
+  auditLogs: AuditLog[];
   storeInfo: StoreInfo;
   taxSettings: TaxSettings;
   loyaltySettings: LoyaltySettings;
   printerSettings: PrinterSettings;
   notificationSettings: NotificationSettings;
   backupSettings: BackupSettings;
+  generalSettings: GeneralSettings;
   roles: Role[];
   systemUsers: SystemUser[];
+  currentUser: SystemUser | null;
   addProduct: (p: Omit<Product, "id">) => void;
   updateProduct: (p: Product) => void;
   deleteProduct: (id: string) => void;
@@ -250,24 +280,30 @@ interface StoreContextType {
   updateSupplier: (s: Supplier) => void;
   deleteSupplier: (id: string) => void;
   addTransaction: (t: Omit<Transaction, "id">) => void;
-  addInvoice: (inv: Omit<Invoice, "id">) => void;
+  addInvoice: (inv: Omit<Invoice, "id">) => string;
   updateInvoice: (inv: Invoice) => void;
   addCategory: (cat: string) => void;
   deleteCategory: (cat: string) => boolean;
+  addInventoryLog: (log: Omit<InventoryLog, "id">) => void;
+  addAuditLog: (log: Omit<AuditLog, "id">) => void;
   updateStoreInfo: (info: StoreInfo) => void;
   updateTaxSettings: (settings: TaxSettings) => void;
   updateLoyaltySettings: (settings: LoyaltySettings) => void;
   updatePrinterSettings: (settings: PrinterSettings) => void;
   updateNotificationSettings: (settings: NotificationSettings) => void;
   updateBackupSettings: (settings: BackupSettings) => void;
+  updateGeneralSettings: (settings: GeneralSettings) => void;
   addRole: (role: Omit<Role, "id">) => void;
   updateRole: (role: Role) => void;
   deleteRole: (id: string) => void;
   addSystemUser: (user: Omit<SystemUser, "id">) => void;
   updateSystemUser: (user: SystemUser) => void;
   deleteSystemUser: (id: string) => void;
+  login: (username: string, password: string) => SystemUser | null;
+  logout: () => void;
   exportData: () => string;
   importData: (json: string) => boolean;
+  getNextInvoiceId: () => string;
 }
 
 const StoreContext = createContext<StoreContextType | null>(null);
@@ -288,6 +324,8 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const [transactions, setTransactions] = useState<Transaction[]>(() => loadFromStorage("transactions", initialTransactions));
   const [invoices, setInvoices] = useState<Invoice[]>(() => loadFromStorage("invoices", initialInvoices));
   const [categories, setCategories] = useState<string[]>(() => loadFromStorage("categories", initialCategories));
+  const [inventoryLogs, setInventoryLogs] = useState<InventoryLog[]>(() => loadFromStorage("inventoryLogs", []));
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => loadFromStorage("auditLogs", []));
   const [storeInfo, setStoreInfo] = useState<StoreInfo>(() => loadFromStorage("storeInfo", {
     name: "متجر التقنية الحديثة", phone: "0112345678",
     address: "الرياض - حي العليا - شارع التحلية", taxNumber: "300123456700003",
@@ -297,14 +335,16 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const [loyaltySettings, setLoyaltySettings] = useState<LoyaltySettings>(() => loadFromStorage("loyaltySettings", { enabled: true, pointsPerUnit: 1, pointValue: 0.1, showOnReceipt: true, allowUnregistered: true }));
   const [printerSettings, setPrinterSettings] = useState<PrinterSettings>(() => loadFromStorage("printerSettings", { type: "80mm", autoPrint: true, openDrawer: true, printTwoCopies: false }));
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => loadFromStorage("notificationSettings", { lowStock: true, expiryAlert: true, creditLimit: true, dueInvoices: true, dailySummary: false }));
-  const [backupSettings, setBackupSettings] = useState<BackupSettings>(() => loadFromStorage("backupSettings", { autoBackup: true, backupTime: "02:00", lastBackup: "2026-02-16 10:00" }));
+  const [backupSettings, setBackupSettings] = useState<BackupSettings>(() => loadFromStorage("backupSettings", { autoBackup: true, backupTime: "02:00", lastBackup: "" }));
+  const [generalSettings, setGeneralSettings] = useState<GeneralSettings>(() => loadFromStorage("generalSettings", { enableQrCode: true, enableBarcode: true, screenLockTimeout: 0 }));
   const [roles, setRoles] = useState<Role[]>(() => loadFromStorage("roles", initialRoles));
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>(() => loadFromStorage("systemUsers", initialUsers));
+  const [currentUser, setCurrentUser] = useState<SystemUser | null>(() => loadFromStorage("currentUser", null));
 
   // Auto-save to localStorage
   useEffect(() => {
-    saveToStorage({ products, customers, suppliers, transactions, invoices, categories, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers });
-  }, [products, customers, suppliers, transactions, invoices, categories, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers]);
+    saveToStorage({ products, customers, suppliers, transactions, invoices, categories, inventoryLogs, auditLogs, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, generalSettings, roles, systemUsers, currentUser });
+  }, [products, customers, suppliers, transactions, invoices, categories, inventoryLogs, auditLogs, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, generalSettings, roles, systemUsers, currentUser]);
 
   const addProduct = useCallback((p: Omit<Product, "id">) => setProducts(prev => [...prev, { ...p, id: genId() }]), []);
   const updateProduct = useCallback((p: Product) => setProducts(prev => prev.map(x => x.id === p.id ? p : x)), []);
@@ -319,7 +359,18 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const deleteSupplier = useCallback((id: string) => setSuppliers(prev => prev.filter(x => x.id !== id)), []);
 
   const addTransaction = useCallback((t: Omit<Transaction, "id">) => setTransactions(prev => [{ ...t, id: genId() }, ...prev]), []);
-  const addInvoice = useCallback((inv: Omit<Invoice, "id">) => setInvoices(prev => [{ ...inv, id: String(Number(prev[0]?.id || 1000) + 1) }, ...prev]), []);
+
+  const getNextInvoiceId = useCallback(() => {
+    const maxId = invoices.reduce((max, inv) => Math.max(max, Number(inv.id) || 0), 1000);
+    return String(maxId + 1);
+  }, [invoices]);
+
+  const addInvoice = useCallback((inv: Omit<Invoice, "id">): string => {
+    const id = getNextInvoiceId();
+    setInvoices(prev => [{ ...inv, id }, ...prev]);
+    return id;
+  }, [getNextInvoiceId]);
+
   const updateInvoice = useCallback((inv: Invoice) => setInvoices(prev => prev.map(x => x.id === inv.id ? inv : x)), []);
 
   const addCategory = useCallback((cat: string) => setCategories(prev => prev.includes(cat) ? prev : [...prev, cat]), []);
@@ -330,12 +381,16 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
     return true;
   }, [products]);
 
+  const addInventoryLog = useCallback((log: Omit<InventoryLog, "id">) => setInventoryLogs(prev => [{ ...log, id: genId() }, ...prev]), []);
+  const addAuditLog = useCallback((log: Omit<AuditLog, "id">) => setAuditLogs(prev => [{ ...log, id: genId() }, ...prev]), []);
+
   const updateStoreInfo = useCallback((info: StoreInfo) => setStoreInfo(info), []);
   const updateTaxSettings = useCallback((s: TaxSettings) => setTaxSettings(s), []);
   const updateLoyaltySettings = useCallback((s: LoyaltySettings) => setLoyaltySettings(s), []);
   const updatePrinterSettings = useCallback((s: PrinterSettings) => setPrinterSettings(s), []);
   const updateNotificationSettings = useCallback((s: NotificationSettings) => setNotificationSettings(s), []);
   const updateBackupSettings = useCallback((s: BackupSettings) => setBackupSettings(s), []);
+  const updateGeneralSettings = useCallback((s: GeneralSettings) => setGeneralSettings(s), []);
 
   const addRole = useCallback((r: Omit<Role, "id">) => setRoles(prev => [...prev, { ...r, id: genId() }]), []);
   const updateRole = useCallback((r: Role) => setRoles(prev => prev.map(x => x.id === r.id ? r : x)), []);
@@ -345,13 +400,21 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const updateSystemUser = useCallback((u: SystemUser) => setSystemUsers(prev => prev.map(x => x.id === u.id ? u : x)), []);
   const deleteSystemUser = useCallback((id: string) => setSystemUsers(prev => prev.filter(x => x.id !== id)), []);
 
+  const login = useCallback((username: string, password: string): SystemUser | null => {
+    const user = systemUsers.find(u => u.username === username && u.password === password && u.active);
+    if (user) setCurrentUser(user);
+    return user || null;
+  }, [systemUsers]);
+
+  const logout = useCallback(() => setCurrentUser(null), []);
+
   const exportData = useCallback(() => {
     return JSON.stringify({
-      products, customers, suppliers, transactions, invoices, categories,
-      storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
+      products, customers, suppliers, transactions, invoices, categories, inventoryLogs, auditLogs,
+      storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, generalSettings, roles, systemUsers,
       exportDate: new Date().toISOString(),
     }, null, 2);
-  }, [products, customers, suppliers, transactions, invoices, categories, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers]);
+  }, [products, customers, suppliers, transactions, invoices, categories, inventoryLogs, auditLogs, storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, generalSettings, roles, systemUsers]);
 
   const importData = useCallback((json: string): boolean => {
     try {
@@ -362,11 +425,14 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
       if (data.transactions) setTransactions(data.transactions);
       if (data.invoices) setInvoices(data.invoices);
       if (data.categories) setCategories(data.categories);
+      if (data.inventoryLogs) setInventoryLogs(data.inventoryLogs);
+      if (data.auditLogs) setAuditLogs(data.auditLogs);
       if (data.storeInfo) setStoreInfo(data.storeInfo);
       if (data.taxSettings) setTaxSettings(data.taxSettings);
       if (data.loyaltySettings) setLoyaltySettings(data.loyaltySettings);
       if (data.printerSettings) setPrinterSettings(data.printerSettings);
       if (data.notificationSettings) setNotificationSettings(data.notificationSettings);
+      if (data.generalSettings) setGeneralSettings(data.generalSettings);
       if (data.roles) setRoles(data.roles);
       if (data.systemUsers) setSystemUsers(data.systemUsers);
       setBackupSettings(prev => ({ ...prev, lastBackup: new Date().toLocaleString("ar-EG") }));
@@ -376,17 +442,19 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
 
   return (
     <StoreContext.Provider value={{
-      products, customers, suppliers, transactions, invoices, categories,
-      storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, roles, systemUsers,
+      products, customers, suppliers, transactions, invoices, categories, inventoryLogs, auditLogs,
+      storeInfo, taxSettings, loyaltySettings, printerSettings, notificationSettings, backupSettings, generalSettings, roles, systemUsers, currentUser,
       addProduct, updateProduct, deleteProduct,
       addCustomer, updateCustomer, deleteCustomer,
       addSupplier, updateSupplier, deleteSupplier,
       addTransaction, addInvoice, updateInvoice,
       addCategory, deleteCategory,
-      updateStoreInfo, updateTaxSettings, updateLoyaltySettings, updatePrinterSettings, updateNotificationSettings, updateBackupSettings,
+      addInventoryLog, addAuditLog,
+      updateStoreInfo, updateTaxSettings, updateLoyaltySettings, updatePrinterSettings, updateNotificationSettings, updateBackupSettings, updateGeneralSettings,
       addRole, updateRole, deleteRole,
       addSystemUser, updateSystemUser, deleteSystemUser,
-      exportData, importData,
+      login, logout,
+      exportData, importData, getNextInvoiceId,
     }}>
       {children}
     </StoreContext.Provider>
