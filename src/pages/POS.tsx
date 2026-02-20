@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { toast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
 
-interface CartItem { id: string; name: string; price: number; qty: number; maxStock: number; }
+interface CartItem { id: string; name: string; price: number; qty: number; maxStock: number; unitName?: string; unitFactor?: number; }
 
 const POS = () => {
   const store = useStore();
@@ -206,14 +206,16 @@ const POS = () => {
 
     // Deduct stock
     cart.forEach(item => {
-      const product = products.find(p => p.id === item.id);
+      const realProductId = item.id.includes("_") ? item.id.split("_")[0] : item.id;
+      const product = products.find(p => p.id === realProductId);
       if (product) {
-        const newStock = product.stock - item.qty;
+        const deductQty = item.qty * (item.unitFactor || 1);
+        const newStock = product.stock - deductQty;
         const status = newStock === 0 ? "نفد" : newStock <= product.reorderLevel ? "منخفض" : "متوفر";
         updateProduct({ ...product, stock: newStock, status });
         addInventoryLog({
           date: today, productId: product.id, productName: product.name,
-          type: "sale", qty: -item.qty, previousStock: product.stock, newStock, reference: `INV#${invoiceId}`,
+          type: "sale", qty: -deductQty, previousStock: product.stock, newStock, reference: `INV#${invoiceId}`,
         });
       }
     });
@@ -286,15 +288,38 @@ const POS = () => {
         <div className="flex-1 overflow-y-auto p-3">
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
             {filteredProducts.map(product => (
-              <button key={product.id} onClick={() => addToCart(product)} className="pos-grid-item text-right">
-                <div className="w-full aspect-square bg-muted rounded-lg mb-2 flex items-center justify-center"><span className="text-2xl">📦</span></div>
-                <p className="text-sm font-medium text-card-foreground line-clamp-1">{product.name}</p>
-                <div className="flex justify-between items-center mt-1">
-                  <p className="text-xs text-muted-foreground">{product.category}</p>
-                  <p className="text-xs text-muted-foreground">{t(lang, "availableLabel")} {product.stock}</p>
-                </div>
-                <p className="text-sm font-bold text-primary mt-1">{product.sellPrice} {cur}</p>
-              </button>
+              <div key={product.id} className="pos-grid-item text-right">
+                <button onClick={() => addToCart(product)} className="w-full text-right">
+                  <div className="w-full aspect-square bg-muted rounded-lg mb-2 flex items-center justify-center"><span className="text-2xl">📦</span></div>
+                  <p className="text-sm font-medium text-card-foreground line-clamp-1">{product.name}</p>
+                  <div className="flex justify-between items-center mt-1">
+                    <p className="text-xs text-muted-foreground">{product.category}</p>
+                    <p className="text-xs text-muted-foreground">{t(lang, "availableLabel")} {product.stock}</p>
+                  </div>
+                  <p className="text-sm font-bold text-primary mt-1">{product.sellPrice} {cur} / {product.unit || t(lang, "piece")}</p>
+                </button>
+                {product.subUnits && product.subUnits.length > 0 && (
+                  <div className="flex gap-1 mt-1.5 flex-wrap">
+                    {product.subUnits.map((su, i) => (
+                      <button key={i} onClick={() => {
+                        const maxInUnit = Math.floor(product.stock / su.factor);
+                        if (maxInUnit < 1) { toast({ title: t(lang, "insufficientStock"), variant: "destructive" }); return; }
+                        setCart(prev => {
+                          const key = `${product.id}_${su.name}`;
+                          const existing = prev.find(item => item.id === key);
+                          if (existing) {
+                            if (existing.qty >= maxInUnit) { toast({ title: t(lang, "insufficientStock"), variant: "destructive" }); return prev; }
+                            return prev.map(item => item.id === key ? { ...item, qty: item.qty + 1 } : item);
+                          }
+                          return [...prev, { id: key, name: `${product.name} (${su.name})`, price: su.price, qty: 1, maxStock: maxInUnit, unitName: su.name, unitFactor: su.factor }];
+                        });
+                      }} className="text-[10px] px-2 py-1 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+                        {su.name} ({su.factor}×) - {su.price} {cur}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { toast } from "@/hooks/use-toast";
 
 const emptyProduct: Omit<Product, "id"> = {
-  name: "", sku: "", barcode: "", category: "", buyPrice: 0, sellPrice: 0, stock: 0, reorderLevel: 10, status: "متوفر",
+  name: "", sku: "", barcode: "", category: "", buyPrice: 0, sellPrice: 0, stock: 0, reorderLevel: 10, status: "متوفر", unit: "قطعة", subUnits: [],
 };
 
 const Products = () => {
@@ -114,6 +114,7 @@ const Products = () => {
               <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "sellPrice")}</th>
               <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "profitMargin")}</th>
               <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "stock")}</th>
+              <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "unit")}</th>
               <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "status")}</th>
               <th className="text-right text-xs font-semibold text-muted-foreground p-3">{t(lang, "actions")}</th>
             </tr></thead>
@@ -129,6 +130,12 @@ const Products = () => {
                     <td className="p-3 text-sm font-medium text-card-foreground">{product.sellPrice} {cur}</td>
                     <td className="p-3"><span className="text-sm font-medium text-success">{margin}%</span></td>
                     <td className="p-3"><span className={cn("text-sm font-medium", product.stock <= product.reorderLevel ? "text-warning" : "text-card-foreground")}>{product.stock}</span></td>
+                    <td className="p-3">
+                      <span className="text-sm text-muted-foreground">{product.unit || t(lang, "piece")}</span>
+                      {product.subUnits && product.subUnits.length > 0 && (
+                        <span className="text-[10px] text-primary mr-1">+{product.subUnits.length}</span>
+                      )}
+                    </td>
                     <td className="p-3"><span className={cn("text-[11px] px-2 py-0.5 rounded-full border font-medium", statusVariant(product.status))}>{statusText(product.status)}</span></td>
                     <td className="p-3">
                       <div className="flex items-center gap-1">
@@ -146,12 +153,12 @@ const Products = () => {
 
       {/* Product Add/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{editing ? t(lang, "editProduct") : t(lang, "addNewProduct")}</DialogTitle>
             <DialogDescription>{editing ? t(lang, "editProductData") : t(lang, "enterNewProduct")}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
             <div><label className="text-xs text-muted-foreground">{t(lang, "productName")} *</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="w-full bg-muted border-0 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" /></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="text-xs text-muted-foreground">{t(lang, "sku")}</label><input value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} className="w-full bg-muted border-0 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" /></div>
@@ -169,6 +176,47 @@ const Products = () => {
             <div className="grid grid-cols-2 gap-3">
               <div><label className="text-xs text-muted-foreground">{t(lang, "quantity")}</label><input type="number" value={form.stock || ""} onChange={e => setForm({ ...form, stock: Number(e.target.value) })} className="w-full bg-muted border-0 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" /></div>
               <div><label className="text-xs text-muted-foreground">{t(lang, "reorderLevel")}</label><input type="number" value={form.reorderLevel || ""} onChange={e => setForm({ ...form, reorderLevel: Number(e.target.value) })} className="w-full bg-muted border-0 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" /></div>
+            </div>
+            {/* Base Unit */}
+            <div><label className="text-xs text-muted-foreground">{t(lang, "baseUnit")}</label>
+              <input value={form.unit || ""} onChange={e => setForm({ ...form, unit: e.target.value })} placeholder={t(lang, "piece")}
+                className="w-full bg-muted border-0 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            </div>
+            {/* Sub Units */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-muted-foreground">{t(lang, "subUnits")}</label>
+                <Button type="button" size="sm" variant="outline" onClick={() => setForm({ ...form, subUnits: [...(form.subUnits || []), { name: "", factor: 1, price: 0 }] })}>
+                  <Plus className="w-3 h-3 mr-1" />{t(lang, "addSubUnit")}
+                </Button>
+              </div>
+              {(form.subUnits || []).map((su, idx) => (
+                <div key={idx} className="grid grid-cols-[1fr_80px_100px_32px] gap-2 items-end bg-muted/50 rounded-lg p-2">
+                  <div>
+                    <label className="text-[10px] text-muted-foreground">{t(lang, "unitName")}</label>
+                    <input value={su.name} onChange={e => {
+                      const updated = [...(form.subUnits || [])]; updated[idx] = { ...su, name: e.target.value }; setForm({ ...form, subUnits: updated });
+                    }} placeholder={t(lang, "box")} className="w-full bg-background border-0 rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted-foreground">{t(lang, "conversionFactor")}</label>
+                    <input type="number" value={su.factor || ""} onChange={e => {
+                      const updated = [...(form.subUnits || [])]; updated[idx] = { ...su, factor: Number(e.target.value) }; setForm({ ...form, subUnits: updated });
+                    }} className="w-full bg-background border-0 rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted-foreground">{t(lang, "unitPrice")}</label>
+                    <input type="number" value={su.price || ""} onChange={e => {
+                      const updated = [...(form.subUnits || [])]; updated[idx] = { ...su, price: Number(e.target.value) }; setForm({ ...form, subUnits: updated });
+                    }} className="w-full bg-background border-0 rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  </div>
+                  <button type="button" onClick={() => setForm({ ...form, subUnits: (form.subUnits || []).filter((_, i) => i !== idx) })}
+                    className="p-1.5 rounded-md text-destructive hover:bg-destructive/10 self-end"><Trash2 className="w-3.5 h-3.5" /></button>
+                </div>
+              ))}
+              {(form.subUnits || []).length > 0 && (
+                <p className="text-[10px] text-muted-foreground">💡 {lang === "English" ? "Factor = how many base units in this unit. e.g. Box=12 pieces" : "المعامل = عدد الوحدات الأساسية في هذه الوحدة. مثال: كرتون = 12 قطعة"}</p>
+              )}
             </div>
           </div>
           <DialogFooter>
